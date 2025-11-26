@@ -1,0 +1,7 @@
+{
+  "product_id": 23,
+  "alert_type": "PRICE_DROP",
+  "target_price": 50.00,
+  "is_active": true,
+  "notification_methods": ["email"]
+}

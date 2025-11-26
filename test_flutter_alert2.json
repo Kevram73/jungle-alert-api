@@ -1,0 +1,9 @@
+{
+  "product_id": 24,
+  "alert_type": "immediate",
+  "target_price": 100.0,
+  "frequency": "immediate",
+  "notification_methods": ["email", "push"],
+  "is_active": true
+}
+
