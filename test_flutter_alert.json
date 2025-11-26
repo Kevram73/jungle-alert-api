@@ -1,9 +1,0 @@
-{
-  "product_id": 23,
-  "alert_type": "email_notification",
-  "target_price": 75.0,
-  "frequency": "immediate",
-  "notification_methods": ["email"],
-  "is_active": true
-}
-
