@@ -1,0 +1,47 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  server-connection:
+    name: Vérifier la connexion au serveur
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Test SSH connection
+        run: |
+          echo "🔍 Test de connexion SSH au serveur..."
+          ssh -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=10 \
+              -o BatchMode=yes \
+              ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+              "echo '✅ Connexion SSH réussie!' && hostname && uptime"
+        
+      - name: Vérifier l'accès au répertoire
+        run: |
+          echo "📁 Vérification de l'accès au répertoire de déploiement..."
+          ssh -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=10 \
+              ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+              "test -d /opt/jungle-alert-laravel && echo '✅ Répertoire existe' || echo '⚠️ Répertoire n existe pas (sera créé lors du déploiement)'"
+
+      - name: Vérifier les services
+        run: |
+          echo "🔧 Vérification des services..."
+          ssh -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=10 \
+              ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+              "php -v && composer --version && nginx -v 2>&1 | head -1 || echo '⚠️ Nginx non trouvé'"
