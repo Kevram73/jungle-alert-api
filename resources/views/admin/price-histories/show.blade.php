@@ -4,14 +4,14 @@
 @section('page-title', 'Détails historique des prix')
 
 @section('content')
-<div class="bg-white rounded-lg shadow p-6">
+<div class="bg-white rounded-lg shadow p-3 lg:p-6">
     <div class="mb-6">
-        <a href="{{ route('admin.price-histories.index') }}" class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700">
+        <a href="{{ route('admin.price-histories.index') }}" class="bg-gray-600 text-white px-3 lg:px-4 py-2 rounded hover:bg-gray-700 text-sm lg:text-base text-center">
             Retour
         </a>
     </div>
 
-    <div class="grid grid-cols-2 gap-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-6">
         <div>
             <label class="block text-sm font-medium text-gray-600">Produit</label>
             <p class="mt-1">{{ $priceHistory->product->title ?? 'N/A' }}</p>

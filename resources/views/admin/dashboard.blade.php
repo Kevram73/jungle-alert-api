@@ -4,8 +4,8 @@
 @section('page-title', 'Dashboard')
 
 @section('content')
-<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-    <div class="bg-white rounded-lg shadow p-6">
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 mb-4 lg:mb-6">
+    <div class="bg-white rounded-lg shadow p-3 lg:p-6">
         <div class="flex items-center">
             <div class="p-3 rounded-full bg-blue-100 text-blue-600">
                 <i class="fas fa-users text-2xl"></i>
@@ -17,7 +17,7 @@
         </div>
     </div>
 
-    <div class="bg-white rounded-lg shadow p-6">
+    <div class="bg-white rounded-lg shadow p-3 lg:p-6">
         <div class="flex items-center">
             <div class="p-3 rounded-full bg-green-100 text-green-600">
                 <i class="fas fa-shopping-bag text-2xl"></i>
@@ -29,7 +29,7 @@
         </div>
     </div>
 
-    <div class="bg-white rounded-lg shadow p-6">
+    <div class="bg-white rounded-lg shadow p-3 lg:p-6">
         <div class="flex items-center">
             <div class="p-3 rounded-full bg-yellow-100 text-yellow-600">
                 <i class="fas fa-bell text-2xl"></i>
@@ -41,7 +41,7 @@
         </div>
     </div>
 
-    <div class="bg-white rounded-lg shadow p-6">
+    <div class="bg-white rounded-lg shadow p-3 lg:p-6">
         <div class="flex items-center">
             <div class="p-3 rounded-full bg-purple-100 text-purple-600">
                 <i class="fas fa-credit-card text-2xl"></i>
@@ -54,28 +54,28 @@
     </div>
 </div>
 
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-    <div class="bg-white rounded-lg shadow p-6">
-        <h3 class="text-lg font-semibold mb-4">Derniers utilisateurs</h3>
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
+    <div class="bg-white rounded-lg shadow p-3 lg:p-6">
+        <h3 class="text-base lg:text-lg font-semibold mb-3 lg:mb-4">Derniers utilisateurs</h3>
         <div class="overflow-x-auto">
             <table class="min-w-full">
                 <thead>
                     <tr class="border-b">
-                        <th class="text-left py-2">Email</th>
-                        <th class="text-left py-2">Abonnement</th>
-                        <th class="text-left py-2">Date</th>
+                        <th class="text-left py-2 text-xs lg:text-sm">Email</th>
+                        <th class="text-left py-2 text-xs lg:text-sm">Abonnement</th>
+                        <th class="text-left py-2 text-xs lg:text-sm">Date</th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach(\App\Models\User::latest()->take(5)->get() as $user)
                     <tr class="border-b">
-                        <td class="py-2">{{ $user->email }}</td>
+                        <td class="py-2 text-xs lg:text-sm">{{ $user->email }}</td>
                         <td class="py-2">
                             <span class="px-2 py-1 text-xs rounded {{ $user->subscription_tier === 'FREE' ? 'bg-gray-200' : ($user->subscription_tier === 'PREMIUM_SIMPLE' ? 'bg-yellow-200' : 'bg-green-200') }}">
                                 {{ $user->subscription_tier }}
                             </span>
                         </td>
-                        <td class="py-2 text-sm text-gray-600">{{ $user->created_at->format('d/m/Y') }}</td>
+                        <td class="py-2 text-xs lg:text-sm text-gray-600">{{ $user->created_at->format('d/m/Y') }}</td>
                     </tr>
                     @endforeach
                 </tbody>
@@ -83,27 +83,27 @@
         </div>
     </div>
 
-    <div class="bg-white rounded-lg shadow p-6">
-        <h3 class="text-lg font-semibold mb-4">Alertes récentes</h3>
+    <div class="bg-white rounded-lg shadow p-3 lg:p-6">
+        <h3 class="text-base lg:text-lg font-semibold mb-3 lg:mb-4">Alertes récentes</h3>
         <div class="overflow-x-auto">
             <table class="min-w-full">
                 <thead>
                     <tr class="border-b">
-                        <th class="text-left py-2">Produit</th>
-                        <th class="text-left py-2">Type</th>
-                        <th class="text-left py-2">Date</th>
+                        <th class="text-left py-2 text-xs lg:text-sm">Produit</th>
+                        <th class="text-left py-2 text-xs lg:text-sm">Type</th>
+                        <th class="text-left py-2 text-xs lg:text-sm">Date</th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach(\App\Models\Alert::with('product')->latest()->take(5)->get() as $alert)
                     <tr class="border-b">
-                        <td class="py-2">{{ str_limit($alert->product->title ?? 'N/A', 30) }}</td>
+                        <td class="py-2 text-xs lg:text-sm">{{ str_limit($alert->product->title ?? 'N/A', 30) }}</td>
                         <td class="py-2">
                             <span class="px-2 py-1 text-xs rounded bg-blue-200">
                                 {{ $alert->alert_type }}
                             </span>
                         </td>
-                        <td class="py-2 text-sm text-gray-600">{{ $alert->created_at->format('d/m/Y') }}</td>
+                        <td class="py-2 text-xs lg:text-sm text-gray-600">{{ $alert->created_at->format('d/m/Y') }}</td>
                     </tr>
                     @endforeach
                 </tbody>

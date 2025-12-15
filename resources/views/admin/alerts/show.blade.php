@@ -4,20 +4,20 @@
 @section('page-title', 'Détails alerte')
 
 @section('content')
-<div class="bg-white rounded-lg shadow p-6">
-    <div class="mb-6 flex justify-between items-center">
-        <h3 class="text-xl font-semibold">Informations alerte</h3>
-        <div class="flex gap-2">
-            <a href="{{ route('admin.alerts.edit', $alert) }}" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+<div class="bg-white rounded-lg shadow p-3 lg:p-6">
+    <div class="mb-4 lg:mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+        <h3 class="text-lg lg:text-xl font-semibold">Informations alerte</h3>
+        <div class="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+            <a href="{{ route('admin.alerts.edit', $alert) }}" class="bg-green-600 text-white px-3 lg:px-4 py-2 rounded hover:bg-green-700 text-sm lg:text-base text-center">
                 <i class="fas fa-edit mr-2"></i>Modifier
             </a>
-            <a href="{{ route('admin.alerts.index') }}" class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700">
+            <a href="{{ route('admin.alerts.index') }}" class="bg-gray-600 text-white px-3 lg:px-4 py-2 rounded hover:bg-gray-700 text-sm lg:text-base text-center">
                 Retour
             </a>
         </div>
     </div>
 
-    <div class="grid grid-cols-2 gap-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-6">
         <div>
             <label class="block text-sm font-medium text-gray-600">Utilisateur</label>
             <p class="mt-1">{{ $alert->user->email }}</p>
@@ -56,7 +56,7 @@
 
         <div>
             <label class="block text-sm font-medium text-gray-600">Notifications</label>
-            <div class="mt-1 flex gap-2">
+            <div class="mt-1 flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                 <span class="px-2 py-1 text-xs rounded {{ $alert->email_sent ? 'bg-green-200' : 'bg-gray-200' }}">Email</span>
                 <span class="px-2 py-1 text-xs rounded {{ $alert->whatsapp_sent ? 'bg-green-200' : 'bg-gray-200' }}">WhatsApp</span>
                 <span class="px-2 py-1 text-xs rounded {{ $alert->push_sent ? 'bg-green-200' : 'bg-gray-200' }}">Push</span>
