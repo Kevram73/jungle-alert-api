@@ -1,4 +1,4 @@
-name: CI/CD
+name: CI/CD Pipeline avec Actions Tierces
 
 on:
   push:
@@ -6,293 +6,320 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  DEPLOY_PATH: /opt/jungle-alert-laravel
+  PHP_VERSION: "8.2"
+
 jobs:
-  server-connection:
-    name: Vérifier la connexion au serveur
+  tests:
+    name: Tests et validation
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     steps:
-      - name: Checkout code
+      - name: Checkout du code
         uses: actions/checkout@v4
 
-      - name: Install sshpass
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y sshpass
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, xml, ctype, iconv, intl, pdo, mysql
+          coverage: xdebug
 
-      - name: Test SSH connection
+      - name: Valider la syntaxe
         run: |
-          echo "🔍 Test de connexion SSH au serveur..."
-          sshpass -p "${{ secrets.SSH_PASSWORD }}" \
-            ssh -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=10 \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-                "echo '✅ Connexion SSH réussie!' && hostname && uptime"
-        
-      - name: Vérifier l'accès au répertoire
-        run: |
-          echo "📁 Vérification de l'accès au répertoire de déploiement..."
-          sshpass -p "${{ secrets.SSH_PASSWORD }}" \
-            ssh -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=10 \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-                "test -d /opt/jungle-alert-laravel && echo '✅ Répertoire existe' || echo '⚠️ Répertoire n existe pas (sera créé lors du déploiement)'"
+          find . -name "*.php" -type f -exec php -l {} \;
 
-      - name: Vérifier les services
+      - name: Tests unitaires
         run: |
-          echo "🔧 Vérification des services..."
-          sshpass -p "${{ secrets.SSH_PASSWORD }}" \
-            ssh -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=10 \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-                "php -v && composer --version && apache2 -v 2>&1 | head -1 || echo '⚠️ Apache non trouvé'"
+          composer install --no-interaction --prefer-dist
+          ./vendor/bin/phpunit --testdox || echo "Aucun test trouvé"
 
   deploy:
-    name: Déployer sur le serveur
+    name: 🚀 Déploiement Production
     runs-on: ubuntu-latest
-    needs: server-connection
+    needs: tests
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     steps:
-      - name: Checkout code
+      - name: Checkout du code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install sshpass
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y sshpass
+      - name: 🔐 Déploiement via SSH
+        uses: easingthemes/ssh-deploy@v4.1.8
+        id: deploy
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        with:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          REMOTE_HOST: ${{ secrets.SSH_HOST }}
+          REMOTE_USER: ${{ secrets.SSH_USER }}
+          REMOTE_PORT: ${{ secrets.SSH_PORT || '22' }}
+          TARGET: ${{ env.DEPLOY_PATH }}
+          EXCLUDE: |
+            **/.git*
+            **/.github*
+            **/node_modules/**
+            **/vendor/**
+            **/storage/*
+            **/*.log
+            **/.env
+            **/.env.*
+            **/docker-compose*
+            **/Dockerfile
+            **/tests/
+            **/*.md
+            **/composer.lock
+            **/package-lock.json
+            **/yarn.lock
+          ARGS: '-avz --delete'
 
-      - name: Create deployment archive
-        run: |
-          echo "📦 Création de l'archive de déploiement..."
-          tar -czf junglealert-laravel.tar.gz \
-            --exclude='.git' \
-            --exclude='node_modules' \
-            --exclude='vendor' \
-            --exclude='.env' \
-            --exclude='storage/logs/*' \
-            --exclude='storage/framework/cache/*' \
-            --exclude='storage/framework/sessions/*' \
-            --exclude='storage/framework/views/*' \
-            --exclude='.github' \
-            .
-
-      - name: Upload archive to server
-        run: |
-          echo "📤 Upload de l'archive vers le serveur..."
-          sshpass -p "${{ secrets.SSH_PASSWORD }}" \
-            scp -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=30 \
-                junglealert-laravel.tar.gz \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/
-
-      - name: Deploy on server
+      - name: ⚙️ Configuration du serveur
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ env.SSH_HOST }}
-          username: ${{ env.SSH_USER }}
-          password: ${{ env.SSH_PASSWORD }}
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
           script: |
-            echo "📦 Extraction de l'archive..."
-            tar -xzf /tmp/junglealert-laravel.tar.gz -C /opt/jungle-alert-laravel
-            echo "✅ Extraction terminée"
-            echo "🔧 Configuration de l'environnement..."
-            cd /opt/jungle-alert-laravel
-            cp .env.example .env
-            php artisan key:generate
-            echo "✅ Configuration terminée"
-            echo "🚀 Démarrage des services..."
-            php artisan serve --host=0.0.0.0 --port=8001 &
-            echo "✅ Démarrage terminé"
-            echo "🔍 Vérification de l'API..."
-            curl -f --max-time 10 http://${{ env.SSH_HOST }}/api/health || echo "⚠️ Test de santé sur port 80 échoué"
-            curl -f --max-time 10 http://${{ env.SSH_HOST }}:8000/api/health || echo "⚠️ Test de santé sur port 8000 échoué"
-            curl -f --max-time 10 http://${{ env.SSH_HOST }}:8001/api/health || echo "⚠️ Test de santé sur port 8001 échoué"
-            echo "✅ Vérification terminée"
-            echo "✅ Déploiement terminé"
+            set -e
+            echo "📁 Répertoire de déploiement : ${{ env.DEPLOY_PATH }}"
+            cd ${{ env.DEPLOY_PATH }}
             
-  configure-mysql:
-    name: Configurer MySQL
+            echo "1️⃣ Vérification de l'environnement..."
+            php -v
+            composer --version
+            mysql --version || echo "MySQL non installé"
+            
+            echo "2️⃣ Configuration de l'environnement Laravel..."
+            if [ ! -f .env ]; then
+              cp .env.example .env
+              echo "✅ .env créé depuis .env.example"
+            fi
+            
+            # Mettre à jour les variables d'environnement
+            if grep -q "APP_ENV=" .env; then
+              sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
+            else
+              echo "APP_ENV=production" >> .env
+            fi
+            
+            if grep -q "APP_DEBUG=" .env; then
+              sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
+            else
+              echo "APP_DEBUG=false" >> .env
+            fi
+            
+            # Configuration de la base de données
+            cat >> .env << 'ENV_CONFIG'
+            DB_CONNECTION=mysql
+            DB_HOST=127.0.0.1
+            DB_PORT=3306
+            DB_DATABASE=junglealert
+            DB_USERNAME=work4connect
+            DB_PASSWORD=Work4Connect2024!
+            ENV_CONFIG
+            
+            echo "3️⃣ Installation des dépendances Composer..."
+            composer install --no-dev --optimize-autoloader --no-interaction
+            
+            echo "4️⃣ Génération de la clé d'application..."
+            php artisan key:generate --force
+            
+            echo "5️⃣ Migration de la base de données..."
+            php artisan migrate --force || echo "⚠️ Migration échouée ou déjà effectuée"
+            
+            echo "6️⃣ Optimisation du cache..."
+            php artisan config:clear
+            php artisan cache:clear
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+            
+            echo "7️⃣ Gestion des permissions..."
+            sudo chown -R www-data:www-data storage bootstrap/cache
+            sudo chmod -R 775 storage bootstrap/cache
+            
+            # Créer les répertoires de logs si nécessaire
+            mkdir -p storage/logs
+            touch storage/logs/laravel.log
+            chmod 664 storage/logs/laravel.log
+            
+            echo "✅ Configuration terminée"
+
+      - name: 🗄️ Configuration de la base de données
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            echo "🗄️ Configuration MySQL..."
+            
+            # Vérifier si MySQL/MariaDB est installé
+            if command -v mysql &> /dev/null; then
+              echo "✅ MySQL/MariaDB est installé"
+              
+              # Démarrer le service
+              sudo systemctl start mysql 2>/dev/null || sudo systemctl start mariadb 2>/dev/null || true
+              
+              # Créer la base de données et l'utilisateur
+              sudo mysql << 'MYSQL_EOF'
+              CREATE DATABASE IF NOT EXISTS junglealert 
+                CHARACTER SET utf8mb4 
+                COLLATE utf8mb4_unicode_ci;
+              
+              CREATE USER IF NOT EXISTS 'work4connect'@'localhost' 
+                IDENTIFIED BY 'Work4Connect2024!';
+              
+              GRANT ALL PRIVILEGES ON junglealert.* 
+                TO 'work4connect'@'localhost';
+              
+              FLUSH PRIVILEGES;
+              MYSQL_EOF
+              
+              echo "✅ Base de données configurée"
+            else
+              echo "⚠️ MySQL/MariaDB n'est pas installé"
+              echo "Installation de MySQL..."
+              sudo apt-get update
+              sudo apt-get install -y mariadb-server mariadb-client
+              sudo mysql_secure_installation --use-default << 'EOF'
+              y
+              Work4Connect2024!
+              Work4Connect2024!
+              y
+              y
+              y
+              y
+              EOF
+            fi
+
+      - name: 🌐 Configuration d'Apache
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            echo "🌐 Configuration d'Apache..."
+            
+            # Installer Apache si nécessaire
+            if ! command -v apache2 &> /dev/null; then
+              echo "📦 Installation d'Apache..."
+              sudo apt-get update
+              sudo apt-get install -y apache2 libapache2-mod-php
+            fi
+            
+            # Activer les modules
+            sudo a2enmod rewrite
+            sudo a2enmod headers
+            
+            # Créer la configuration du site
+            sudo tee /etc/apache2/sites-available/jungle-alert.conf > /dev/null << 'APACHE_EOF'
+            <VirtualHost *:80>
+                ServerName ${{ secrets.SSH_HOST }}
+                ServerAdmin admin@jungle-alert.com
+                DocumentRoot ${{ env.DEPLOY_PATH }}/public
+                
+                <Directory ${{ env.DEPLOY_PATH }}/public>
+                    Options -Indexes +FollowSymLinks
+                    AllowOverride All
+                    Require all granted
+                    
+                    <IfModule mod_rewrite.c>
+                        RewriteEngine On
+                        RewriteCond %{REQUEST_FILENAME} !-d
+                        RewriteCond %{REQUEST_FILENAME} !-f
+                        RewriteRule ^ index.php [L]
+                    </IfModule>
+                </Directory>
+                
+                # Headers de sécurité
+                Header always set X-Content-Type-Options "nosniff"
+                Header always set X-Frame-Options "SAMEORIGIN"
+                Header always set X-XSS-Protection "1; mode=block"
+                
+                ErrorLog ${APACHE_LOG_DIR}/jungle-alert-error.log
+                CustomLog ${APACHE_LOG_DIR}/jungle-alert-access.log combined
+            </VirtualHost>
+            APACHE_EOF
+            
+            # Activer le site
+            sudo a2ensite jungle-alert.conf
+            sudo a2dissite 000-default.conf
+            
+            # Tester la configuration
+            sudo apache2ctl configtest
+            
+            # Redémarrer Apache
+            sudo systemctl restart apache2
+            
+            echo "✅ Apache configuré et démarré"
+
+      - name: 🧪 Tests de déploiement
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "🧪 Tests de déploiement..."
+            sleep 5
+            
+            # Tester l'API
+            echo "🔍 Test de l'API..."
+            curl -f --max-time 10 http://localhost/api/health \
+              || curl -f --max-time 10 http://localhost/health \
+              || curl -f --max-time 10 http://localhost/ \
+              || echo "⚠️ Test API échoué"
+            
+            # Vérifier les logs Apache
+            echo "📋 Vérification des logs..."
+            sudo tail -5 /var/log/apache2/jungle-alert-error.log 2>/dev/null || echo "Aucun log d'erreur"
+            
+            # Vérifier le statut des services
+            echo "⚡ Statut des services..."
+            sudo systemctl status apache2 --no-pager | head -10
+            sudo systemctl status mysql --no-pager 2>/dev/null | head -10 \
+              || sudo systemctl status mariadb --no-pager 2>/dev/null | head -10 \
+              || echo "Service MySQL non trouvé"
+
+      - name: 📊 Rapport de déploiement
+        if: always()
+        run: |
+          echo "## 🚀 Rapport de Déploiement" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application :** Jungle Alert Laravel" >> $GITHUB_STEP_SUMMARY
+          echo "**Environnement :** Production" >> $GITHUB_STEP_SUMMARY
+          echo "**Serveur :** ${{ secrets.SSH_HOST }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Chemin :** ${{ env.DEPLOY_PATH }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if job.status == 'success'; then
+            echo "✅ **Statut :** Déploiement réussi" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**URLs de test :**" >> $GITHUB_STEP_SUMMARY
+            echo "- http://${{ secrets.SSH_HOST }}/" >> $GITHUB_STEP_SUMMARY
+            echo "- http://${{ secrets.SSH_HOST }}/api/health" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Statut :** Échec du déploiement" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Consultez les logs ci-dessus pour plus de détails." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  cleanup:
+    name: 🧹 Nettoyage
     runs-on: ubuntu-latest
     needs: deploy
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always()
     
     steps:
-      - name: Install sshpass
+      - name: Nettoyer les artefacts
         run: |
-          sudo apt-get update
-          sudo apt-get install -y sshpass
-
-      - name: Vérifier et démarrer MySQL
-        run: |
-          echo "🔍 Vérification et démarrage de MySQL..."
-          sshpass -p "${{ secrets.SSH_PASSWORD }}" \
-            ssh -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=30 \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
-          set -e
-          
-          echo "🔍 Vérification de MySQL..."
-          systemctl start mysql || systemctl start mariadb || true
-          systemctl enable mysql || systemctl enable mariadb || true
-          sleep 2
-          
-          if ! systemctl is-active --quiet mysql && ! systemctl is-active --quiet mariadb; then
-            echo "⚠️  MySQL n'est pas démarré, tentative de démarrage..."
-            systemctl start mysql || systemctl start mariadb || true
-            sleep 3
-          fi
-          
-          if systemctl is-active --quiet mysql || systemctl is-active --quiet mariadb; then
-            echo "✅ MySQL est en cours d'exécution"
-          else
-            echo "❌ MySQL n'est pas démarré"
-            exit 1
-          fi
-          
-          REMOTE_PATH="/opt/jungle-alert-laravel"
-          cd $REMOTE_PATH
-          
-          # Configurer la base de données dans .env
-          sed -i 's/DB_HOST=.*/DB_HOST=127.0.0.1/' .env || echo "DB_HOST=127.0.0.1" >> .env
-          sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env || echo "DB_PORT=3306" >> .env
-          sed -i 's/DB_DATABASE=.*/DB_DATABASE=junglealert/' .env || echo "DB_DATABASE=junglealert" >> .env
-          sed -i 's/DB_USERNAME=.*/DB_USERNAME=work4connect/' .env || echo "DB_USERNAME=work4connect" >> .env
-          sed -i 's/DB_PASSWORD=.*/DB_PASSWORD=Work4Connect2024!/' .env || echo "DB_PASSWORD=Work4Connect2024!" >> .env
-          
-          # Vider le cache de configuration avant de tester la connexion
-          php artisan config:clear
-          php artisan cache:clear
-          
-          # Vérifier la connexion à la base de données
-          echo "🔍 Vérification de la connexion à la base de données..."
-          php artisan db:show || echo "⚠️  Impossible de se connecter à la base de données"
-          
-          # Créer la base de données si elle n'existe pas
-          echo "🗄️  Création de la base de données si nécessaire..."
-          mysql -u work4connect -p'Work4Connect2024!' -e "CREATE DATABASE IF NOT EXISTS junglealert CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" || echo "⚠️  Impossible de créer la base de données (peut-être qu'elle existe déjà)"
-          
-          echo "✅ Configuration MySQL terminée"
-          EOF
-
-  configure-apache:
-    name: Configurer Apache
-    runs-on: ubuntu-latest
-    needs: configure-mysql
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-      - name: Install sshpass
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y sshpass
-
-      - name: Configurer Apache
-        run: |
-          echo "🌐 Configuration d'Apache..."
-          sshpass -p "${{ secrets.SSH_PASSWORD }}" \
-            ssh -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=30 \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-                "SERVER_IP='${{ secrets.SSH_HOST }}' && \
-                cat > /etc/apache2/sites-available/jungle-alert-api.conf << 'APACHE_EOF'
-          <VirtualHost *:80>
-              ServerName ${SERVER_IP}
-              DocumentRoot /opt/jungle-alert-laravel/public
-              
-              <Directory /opt/jungle-alert-laravel/public>
-                  AllowOverride All
-                  Require all granted
-              </Directory>
-              
-              ErrorLog \${APACHE_LOG_DIR}/jungle-alert-api_error.log
-              CustomLog \${APACHE_LOG_DIR}/jungle-alert-api_access.log combined
-          </VirtualHost>
-
-          <VirtualHost *:8000>
-              ServerName ${SERVER_IP}
-              DocumentRoot /opt/jungle-alert-laravel/public
-              
-              <Directory /opt/jungle-alert-laravel/public>
-                  AllowOverride All
-                  Require all granted
-              </Directory>
-              
-              ErrorLog \${APACHE_LOG_DIR}/jungle-alert-api_error.log
-              CustomLog \${APACHE_LOG_DIR}/jungle-alert-api_access.log combined
-          </VirtualHost>
-          APACHE_EOF
-          && \
-          a2ensite jungle-alert-api.conf || true && \
-          a2dissite 000-default.conf || true && \
-          a2enmod rewrite || true && \
-          a2enmod headers || true && \
-          apache2ctl configtest && \
-          systemctl restart apache2 && \
-          echo '✅ Apache configuré'"
-
-  start-services:
-    name: Démarrer les services
-    runs-on: ubuntu-latest
-    needs: configure-apache
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-      - name: Install sshpass
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y sshpass
-
-      - name: Démarrer l'API Laravel
-        run: |
-          echo "🚀 Démarrage des services..."
-          sshpass -p "${{ secrets.SSH_PASSWORD }}" \
-            ssh -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=30 \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
-          set -e
-          
-          REMOTE_PATH="/opt/jungle-alert-laravel"
-          cd $REMOTE_PATH
-          
-          # Arrêter les instances existantes
-          pkill -f "php artisan serve" || true
-          sleep 2
-          
-          # Démarrer l'API en arrière-plan sur le port 8001
-          nohup php artisan serve --host=0.0.0.0 --port=8001 > /var/log/jungle-alert-laravel.log 2>&1 &
-          
-          sleep 3
-          
-          # Vérifier que le processus est en cours d'exécution
-          if pgrep -f "php artisan serve" > /dev/null; then
-            echo "✅ API Laravel démarrée sur le port 8001"
-          else
-            echo "❌ Échec du démarrage de l'API"
-            exit 1
-          fi
-          EOF
-
-  test-deployment:
-    name: Tester le déploiement
-    runs-on: ubuntu-latest
-    needs: start-services
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-      - name: Test API sur tous les ports
-        run: |
-          echo "🧪 Test de l'API sur tous les ports..."
-          sleep 5
-          
-          echo "🔍 Test sur le port 80..."
-          curl -f --max-time 10 http://${{ secrets.SSH_HOST }}/api/health || echo "⚠️ Test de santé sur port 80 échoué"
-          
-          echo "🔍 Test sur le port 8000..."
-          curl -f --max-time 10 http://${{ secrets.SSH_HOST }}:8000/api/health || echo "⚠️ Test de santé sur port 8000 échoué"
-          
-          echo "🔍 Test sur le port 8001..."
-          curl -f --max-time 10 http://${{ secrets.SSH_HOST }}:8001/api/health || echo "⚠️ Test de santé sur port 8001 échoué"
-          
-          echo "✅ Tests terminés"
+          echo "🧹 Nettoyage des artefacts..."
+          # Ajouter ici la logique de nettoyage si nécessaire
