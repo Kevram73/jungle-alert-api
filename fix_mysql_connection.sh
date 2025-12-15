@@ -7,7 +7,7 @@ set -e
 
 echo "🔧 Correction de la connexion MySQL pour Jungle Alert API"
 
-cd /var/www/html/jungle-alert-api || exit 1
+cd /opt/jungle-alert-laravel || exit 1
 
 # Vérifier et démarrer MySQL
 echo "🔍 Vérification de MySQL..."

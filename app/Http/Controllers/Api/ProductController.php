@@ -29,6 +29,22 @@ class ProductController extends Controller
         $host = parse_url($url, PHP_URL_HOST) ?? '';
         $host = strtolower($host);
         
+        // Check short URLs first (amzn.eu, amzn.to, a.co, etc.)
+        
+        if (str_contains($host, 'amzn.com.br')) return 'BR';
+        if (str_contains($host, 'amzn.co.uk')) return 'UK';
+        if (str_contains($host, 'amzn.de')) return 'DE';
+        if (str_contains($host, 'amzn.fr')) return 'FR';
+        if (str_contains($host, 'amzn.it')) return 'IT';
+        if (str_contains($host, 'amzn.es')) return 'ES';
+        if (str_contains($host, 'amzn.in')) return 'IN';
+        if (str_contains($host, 'amzn.ca')) return 'CA';
+        if (str_contains($host, 'amzn.eu')) return 'EU';
+        
+        if (str_contains($host, 'a.co')) {
+            // a.co is typically US, but could be resolved
+        }
+        
         // Check specific domains first (more specific before less specific)
         // Supports all major Amazon marketplaces: US, DE, UK, FR, IT, ES, BR, IN, CA, EU
         if (str_contains($host, 'amazon.com.br')) return 'BR';
@@ -129,9 +145,24 @@ class ProductController extends Controller
             ], 422);
         }
 
-        // Vérifier si le produit existe déjà pour cet utilisateur
+        // Résoudre l'URL raccourcie si nécessaire (amzn.eu, a.co, etc.)
+        $resolvedUrl = $request->amazon_url;
+        if (strpos($resolvedUrl, 'a.co') !== false || 
+            strpos($resolvedUrl, 'amzn.eu') !== false || 
+            strpos($resolvedUrl, 'amzn.to') !== false || 
+            strpos($resolvedUrl, 'amzn.com') !== false) {
+            $resolved = $this->scrapingService->resolveShortUrl($resolvedUrl);
+            if ($resolved) {
+                $resolvedUrl = $resolved;
+            }
+        }
+
+        // Vérifier si le produit existe déjà pour cet utilisateur (avec URL originale et résolue)
         $existingProduct = Product::where('user_id', $user->id)
-            ->where('amazon_url', $request->amazon_url)
+            ->where(function($query) use ($request, $resolvedUrl) {
+                $query->where('amazon_url', $request->amazon_url)
+                      ->orWhere('amazon_url', $resolvedUrl);
+            })
             ->first();
 
         if ($existingProduct) {
@@ -141,8 +172,8 @@ class ProductController extends Controller
             ], 409);
         }
 
-        // Extraire le marketplace et la devise depuis l'URL
-        $marketplace = $this->extractMarketplaceFromUrl($request->amazon_url);
+        // Extraire le marketplace et la devise depuis l'URL (utiliser l'URL résolue si disponible)
+        $marketplace = $this->extractMarketplaceFromUrl($resolvedUrl);
         $currency = $this->currencyForMarketplace($marketplace);
 
         $productData = [
@@ -162,34 +193,74 @@ class ProductController extends Controller
             if ($scrapedData['success']) {
                 $data = $scrapedData['data'];
                 $productData = array_merge($productData, [
-                    'title' => $data['title'] ?? 'Product from Amazon',
+                    'title' => $data['title'] ?? $data['name'] ?? 'Product from Amazon',
+                    'description' => $data['description'] ?? null,
                     'image_url' => $data['image_url'] ?? null,
-                    'current_price' => $data['price'] ?? 0,
+                    'current_price' => $data['price'] ?? $data['current_price'] ?? 0,
+                    'original_price' => $data['original_price'] ?? null,
                     'asin' => $data['asin'] ?? null,
+                    'availability' => $data['availability'] ?? null,
+                    'rating' => isset($data['rating']) ? (float) $data['rating'] : (isset($data['stars']) ? (float) $data['stars'] : null),
+                    'review_count' => isset($data['review_count']) ? (int) $data['review_count'] : (isset($data['number_of_reviews']) ? (int) $data['number_of_reviews'] : null),
+                    'category' => $data['category'] ?? null,
+                    'category_path' => $data['category_path'] ?? null,
+                    'stock_quantity' => isset($data['stock_quantity']) ? (int) $data['stock_quantity'] : null,
+                    'stock_status' => $data['stock_status'] ?? null,
+                    'brand' => $data['brand'] ?? null,
+                    'seller' => $data['seller'] ?? null,
+                    'is_prime' => isset($data['is_prime']) ? (bool) $data['is_prime'] : false,
+                    'discount_percentage' => isset($data['discount_percentage']) ? (float) $data['discount_percentage'] : null,
+                    'features' => isset($data['features']) && is_array($data['features']) ? $data['features'] : null,
+                    'images' => isset($data['images']) && is_array($data['images']) ? $data['images'] : null,
                 ]);
             } else {
                 // Si le scraping échoue, utiliser des données de base
                 $productData = array_merge($productData, [
                     'title' => 'Product from Amazon',
+                    'description' => null,
                     'image_url' => null,
                     'current_price' => 0,
+                    'original_price' => null,
                     'asin' => null,
+                    'availability' => null,
+                    'rating' => null,
+                    'review_count' => null,
+                    'category' => null,
+                    'category_path' => null,
+                    'stock_quantity' => null,
+                    'stock_status' => null,
+                    'brand' => null,
+                    'seller' => null,
+                    'is_prime' => false,
+                    'discount_percentage' => null,
+                    'features' => null,
+                    'images' => null,
                 ]);
             }
         } else {
             // Données manuelles (fallback)
             $request->validate([
                 'title' => 'required|string|max:255',
+                'description' => 'nullable|string',
                 'image_url' => 'nullable|url|max:500',
                 'current_price' => 'required|numeric|min:0',
                 'asin' => 'nullable|string|max:20',
+                'availability' => 'nullable|string|max:255',
+                'rating' => 'nullable|numeric|min:0|max:5',
+                'review_count' => 'nullable|integer|min:0',
+                'category' => 'nullable|string|max:255',
             ]);
 
             $productData = array_merge($productData, [
                 'title' => $request->title,
+                'description' => $request->description,
                 'image_url' => $request->image_url,
                 'current_price' => $request->current_price,
                 'asin' => $request->asin,
+                'availability' => $request->availability,
+                'rating' => $request->rating ? (float) $request->rating : null,
+                'review_count' => $request->review_count ? (int) $request->review_count : null,
+                'category' => $request->category,
             ]);
             
             // Si le marketplace/currency n'est pas défini, l'extraire de l'URL
@@ -212,13 +283,32 @@ class ProductController extends Controller
             ]);
         }
 
-        // Créer automatiquement une alerte PRICE_DROP si un target_price est fourni
+        // Créer automatiquement les 3 types d'alerts si un target_price est fourni
         if ($request->target_price && $request->target_price > 0) {
+            // 1. Alerte PRICE_DROP - déclenchée quand le prix descend en dessous du target
             Alert::create([
                 'user_id' => $user->id,
                 'product_id' => $product->id,
                 'target_price' => $request->target_price,
                 'alert_type' => 'PRICE_DROP',
+                'is_active' => true,
+            ]);
+
+            // 2. Alerte PRICE_INCREASE - déclenchée quand le prix dépasse le target
+            Alert::create([
+                'user_id' => $user->id,
+                'product_id' => $product->id,
+                'target_price' => $request->target_price,
+                'alert_type' => 'PRICE_INCREASE',
+                'is_active' => true,
+            ]);
+
+            // 3. Alerte STOCK_AVAILABLE - déclenchée quand le produit est en stock
+            Alert::create([
+                'user_id' => $user->id,
+                'product_id' => $product->id,
+                'target_price' => $request->target_price, // Utilisé comme référence
+                'alert_type' => 'STOCK_AVAILABLE',
                 'is_active' => true,
             ]);
         }
@@ -270,25 +360,43 @@ class ProductController extends Controller
 
         $request->validate([
             'title' => 'sometimes|string|max:255',
+            'description' => 'nullable|string',
             'image_url' => 'nullable|url|max:500',
             'current_price' => 'sometimes|numeric|min:0',
             'target_price' => 'nullable|numeric|min:0',
             'is_active' => 'sometimes|boolean',
             'currency' => 'sometimes|string|size:3',
             'marketplace' => 'sometimes|string|max:10',
+            'availability' => 'nullable|string|max:255',
+            'rating' => 'nullable|numeric|min:0|max:5',
+            'review_count' => 'nullable|integer|min:0',
+            'category' => 'nullable|string|max:255',
         ]);
 
         $oldPrice = $product->current_price;
         
         $updateData = $request->only([
             'title',
+            'description',
             'image_url',
             'current_price',
             'target_price',
             'is_active',
             'currency',
             'marketplace',
+            'availability',
+            'rating',
+            'review_count',
+            'category',
         ]);
+        
+        // Convertir rating et review_count en types appropriés
+        if (isset($updateData['rating'])) {
+            $updateData['rating'] = (float) $updateData['rating'];
+        }
+        if (isset($updateData['review_count'])) {
+            $updateData['review_count'] = (int) $updateData['review_count'];
+        }
         
         // Si marketplace est mis à jour, mettre à jour aussi la devise UNIQUEMENT si elle n'est pas fournie
         // et si le produit n'a pas déjà une devise définie (préserve l'EUR si déjà défini)
@@ -443,12 +551,27 @@ class ProductController extends Controller
         // Extraire le marketplace depuis l'URL si nécessaire
         $marketplace = $this->extractMarketplaceFromUrl($product->amazon_url);
         
-        // Préparer les données de mise à jour
+        // Préparer les données de mise à jour avec tous les détails du scraping enrichi
         $updateData = [
-            'title' => $data['title'] ?? $product->title,
+            'title' => $data['title'] ?? $data['name'] ?? $product->title,
+            'description' => $data['description'] ?? $product->description,
             'image_url' => $data['image_url'] ?? $product->image_url,
-            'current_price' => $data['price'] ?? $product->current_price,
+            'current_price' => $data['price'] ?? $data['current_price'] ?? $product->current_price,
+            'original_price' => $data['original_price'] ?? $product->original_price,
             'asin' => $data['asin'] ?? $product->asin,
+            'availability' => $data['availability'] ?? $product->availability,
+            'rating' => isset($data['rating']) ? (float) $data['rating'] : (isset($data['stars']) ? (float) $data['stars'] : $product->rating),
+            'review_count' => isset($data['review_count']) ? (int) $data['review_count'] : (isset($data['number_of_reviews']) ? (int) $data['number_of_reviews'] : $product->review_count),
+            'category' => $data['category'] ?? $product->category,
+            'category_path' => $data['category_path'] ?? $product->category_path,
+            'stock_quantity' => isset($data['stock_quantity']) ? (int) $data['stock_quantity'] : $product->stock_quantity,
+            'stock_status' => $data['stock_status'] ?? $product->stock_status,
+            'brand' => $data['brand'] ?? $product->brand,
+            'seller' => $data['seller'] ?? $product->seller,
+            'is_prime' => isset($data['is_prime']) ? (bool) $data['is_prime'] : $product->is_prime,
+            'discount_percentage' => isset($data['discount_percentage']) ? (float) $data['discount_percentage'] : $product->discount_percentage,
+            'features' => isset($data['features']) && is_array($data['features']) ? $data['features'] : $product->features,
+            'images' => isset($data['images']) && is_array($data['images']) ? $data['images'] : $product->images,
             'marketplace' => $marketplace,
         ];
         

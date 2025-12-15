@@ -7,13 +7,151 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 use Exception;
 
+/**
+ * Service de scraping Amazon ENRICHI avec support MOBILE
+ * Convertit automatiquement les liens mobiles en liens desktop pour avoir plus de données
+ * 
+ * Extrait TOUTES les informations produit :
+ * - Nom complet du produit
+ * - Marketplace (pays)
+ * - ASIN
+ * - Nombre d'étoiles (rating) ⭐
+ * - Nombre d'avis (reviews) 💬
+ * - Nombre en stock 📦
+ * - Statut de disponibilité
+ * - Catégories complètes 🏷️
+ * - Prix, images, description, etc.
+ */
 class AmazonScrapingService
 {
-    private $userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
+    private array $userAgents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    ];
+
+    /**
+     * Scrape product with ALL enriched data
+     * Supporte les liens web ET mobile
+     */
+    public function scrapeProduct(string $url, bool $useCache = true): array
+    {
+        try {
+            // 🔄 ÉTAPE 1: Normaliser l'URL (mobile → desktop)
+            $url = $this->normalizeAmazonUrl($url);
+            Log::info("Normalized URL: {$url}");
+
+            // Resolve short URLs
+            if ($this->isShortUrl($url)) {
+                $resolvedUrl = $this->resolveShortUrl($url);
+                if ($resolvedUrl) {
+                    $url = $this->normalizeAmazonUrl($resolvedUrl);
+                    Log::info("Short URL resolved and normalized: {$url}");
+                }
+            }
+
+            // Check cache
+            if ($useCache) {
+                $cacheKey = 'amazon_enriched_' . md5($url);
+                $cachedData = Cache::get($cacheKey);
+                
+                if ($cachedData !== null) {
+                    Log::debug("Cache hit: {$url}");
+                    return [
+                        'success' => true,
+                        'data' => $cachedData,
+                        'cached' => true,
+                    ];
+                }
+            }
+
+            // Extract ASIN and marketplace
+            $asin = $this->extractAsinFromUrl($url);
+            if (!$asin) {
+                throw new Exception('Could not extract ASIN from URL');
+            }
+
+            $marketplace = $this->extractMarketplaceFromUrl($url);
+            $country = $this->getCountryFromMarketplace($marketplace);
+
+            Log::info("Scraping: ASIN={$asin}, Marketplace={$marketplace}, Country={$country}");
+
+            // Fetch HTML
+            $html = $this->fetchProductPage($url);
+
+            // Extract ALL data
+            $productData = $this->extractAllProductData($html, $url, $asin, $marketplace, $country);
+            
+            // Fallback: Si l'image principale n'est pas trouvée, utiliser la première image de la liste
+            if (empty($productData['image_url']) && !empty($productData['images'])) {
+                $productData['image_url'] = $productData['images'][0];
+                Log::info("Using first image from images array as main image");
+            }
+            
+            // Logging pour déboguer les problèmes d'extraction
+            if (empty($productData['price']) && empty($productData['current_price'])) {
+                Log::warning("Price extraction failed for ASIN: {$asin}, Marketplace: {$marketplace}");
+            }
+            if (empty($productData['image_url'])) {
+                Log::warning("Image extraction failed for ASIN: {$asin}, Marketplace: {$marketplace}");
+            }
+
+            // Validate
+            if (!$this->isValidProductData($productData)) {
+                throw new Exception('Scraped data is incomplete or invalid');
+            }
+
+            // Cache result
+            if ($useCache) {
+                $cacheKey = 'amazon_enriched_' . md5($url);
+                Cache::put($cacheKey, $productData, now()->addMinutes(5));
+            }
+
+            Log::info("Successfully scraped: {$productData['title']}");
+
+            return [
+                'success' => true,
+                'data' => $productData,
+                'cached' => false,
+            ];
+
+        } catch (Exception $e) {
+            Log::error('Scraping error: ' . $e->getMessage() . ' | URL: ' . $url);
+            
+            return [
+                'success' => false,
+                'error' => $e->getMessage(),
+                'url' => $url,
+            ];
+        }
+    }
+
+    /**
+     * 🔄 NOUVELLE MÉTHODE: Normaliser les URLs Amazon
+     * Convertit les liens mobiles en liens desktop pour avoir plus de données
+     */
+    private function normalizeAmazonUrl(string $url): string
+    {
+        // Extraire l'ASIN
+        $asin = $this->extractAsinFromUrl($url);
+        if (!$asin) {
+            return $url; // Retourner l'URL originale si pas d'ASIN
+        }
+
+        // Extraire le domaine de base
+        $baseUrl = $this->getAmazonBaseUrl($url);
+
+        // 🎯 Construire l'URL desktop canonique
+        // Format: https://www.amazon.XX/dp/{ASIN}
+        $canonicalUrl = "{$baseUrl}/dp/{$asin}";
+
+        Log::debug("URL normalized: {$url} → {$canonicalUrl}");
+
+        return $canonicalUrl;
+    }
 
     /**
      * Get Amazon base URL from marketplace or URL
-     * Supports all major Amazon marketplaces: US, DE, UK, FR, IT, ES, BR, IN, CA
      */
     private function getAmazonBaseUrl(?string $url = null): string
     {
@@ -21,7 +159,21 @@ class AmazonScrapingService
             $host = parse_url($url, PHP_URL_HOST) ?? '';
             $host = strtolower($host);
             
-            // Check specific domains first (more specific before less specific)
+            // Remplacer les domaines mobiles par les domaines desktop
+            $host = str_replace('m.amazon', 'www.amazon', $host);
+            
+            // Check short URLs first
+            if (str_contains($host, 'amzn.com.br')) return 'https://www.amazon.com.br';
+            if (str_contains($host, 'amzn.co.uk')) return 'https://www.amazon.co.uk';
+            if (str_contains($host, 'amzn.de')) return 'https://www.amazon.de';
+            if (str_contains($host, 'amzn.fr')) return 'https://www.amazon.fr';
+            if (str_contains($host, 'amzn.it')) return 'https://www.amazon.it';
+            if (str_contains($host, 'amzn.es')) return 'https://www.amazon.es';
+            if (str_contains($host, 'amzn.in')) return 'https://www.amazon.in';
+            if (str_contains($host, 'amzn.ca')) return 'https://www.amazon.ca';
+            if (str_contains($host, 'amzn.eu')) return 'https://www.amazon.eu';
+            
+            // Check specific domains
             if (str_contains($host, 'amazon.com.br')) return 'https://www.amazon.com.br';
             if (str_contains($host, 'amazon.co.uk')) return 'https://www.amazon.co.uk';
             if (str_contains($host, 'amazon.de')) return 'https://www.amazon.de';
@@ -31,133 +183,24 @@ class AmazonScrapingService
             if (str_contains($host, 'amazon.in')) return 'https://www.amazon.in';
             if (str_contains($host, 'amazon.ca')) return 'https://www.amazon.ca';
             if (str_contains($host, 'amazon.eu')) return 'https://www.amazon.eu';
-            // Check for amazon.com last (as it's the most generic)
             if (str_contains($host, 'amazon.com')) return 'https://www.amazon.com';
         }
         
-        // Default to US
         return 'https://www.amazon.com';
     }
 
     /**
-     * Scrape product information from Amazon URL with caching
-     */
-    public function scrapeProduct(string $url, bool $useCache = true): array
-    {
-        try {
-            // Si c'est une URL raccourcie, la résoudre d'abord
-            if (strpos($url, 'a.co') !== false || strpos($url, 'amzn.eu') !== false || strpos($url, 'amzn.to') !== false || strpos($url, 'amzn.com') !== false) {
-                $resolvedUrl = $this->resolveShortUrl($url);
-                if ($resolvedUrl) {
-                    $url = $resolvedUrl;
-                }
-            }
-
-            // Check cache first (5 minutes TTL for price data)
-            if ($useCache) {
-                $cacheKey = 'amazon_scrape_' . md5($url);
-                $cachedData = Cache::get($cacheKey);
-                
-                if ($cachedData !== null) {
-                    Log::debug("Cache hit for Amazon scraping: {$url}");
-                    return [
-                        'success' => true,
-                        'data' => $cachedData,
-                        'cached' => true,
-                    ];
-                }
-            }
-
-            // Extraire l'ASIN de l'URL
-            $asin = $this->extractAsinFromUrl($url);
-            if (!$asin) {
-                // Essayer de scraper directement sans ASIN
-                $productData = $this->scrapeProductData($url, null);
-                if (empty($productData) || !isset($productData['title'])) {
-                    throw new Exception('Invalid Amazon URL - ASIN not found');
-                }
-            } else {
-                // Construire l'URL de l'API Amazon (ou utiliser une méthode alternative)
-                $productData = $this->scrapeProductData($url, $asin);
-            }
-
-            // Cache the result for 5 minutes
-            if ($useCache && !empty($productData)) {
-                $cacheKey = 'amazon_scrape_' . md5($url);
-                Cache::put($cacheKey, $productData, now()->addMinutes(5));
-            }
-
-            return [
-                'success' => true,
-                'data' => $productData,
-                'cached' => false,
-            ];
-
-        } catch (Exception $e) {
-            Log::error('Amazon scraping error: ' . $e->getMessage());
-            return [
-                'success' => false,
-                'error' => $e->getMessage()
-            ];
-        }
-    }
-
-    /**
-     * Scrape product with retry mechanism
-     */
-    public function scrapeProductWithRetry(string $url, int $maxRetries = 3, bool $useCache = true): array
-    {
-        $lastError = null;
-        
-        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-            try {
-                // Don't use cache on retry attempts (except first)
-                $result = $this->scrapeProduct($url, $useCache && $attempt === 1);
-                
-                if ($result['success']) {
-                    return $result;
-                }
-                
-                $lastError = $result['error'] ?? 'Unknown error';
-                
-                // Exponential backoff: wait longer between retries
-                if ($attempt < $maxRetries) {
-                    $delay = pow(2, $attempt) * 1000000; // microseconds (1s, 2s, 4s)
-                    usleep($delay);
-                    Log::info("Retrying Amazon scrape (attempt {$attempt}/{$maxRetries}): {$url}");
-                }
-                
-            } catch (Exception $e) {
-                $lastError = $e->getMessage();
-                
-                if ($attempt < $maxRetries) {
-                    $delay = pow(2, $attempt) * 1000000;
-                    usleep($delay);
-                    Log::warning("Amazon scrape exception (attempt {$attempt}/{$maxRetries}): " . $e->getMessage());
-                }
-            }
-        }
-        
-        Log::error("Amazon scraping failed after {$maxRetries} attempts: {$url} - {$lastError}");
-        
-        return [
-            'success' => false,
-            'error' => "Failed after {$maxRetries} attempts: {$lastError}",
-            'attempts' => $maxRetries,
-        ];
-    }
-
-    /**
-     * Extract ASIN from Amazon URL
+     * Extract ASIN from URL (supporte mobile et desktop)
      */
     private function extractAsinFromUrl(string $url): ?string
     {
-        // Patterns pour extraire l'ASIN des URLs Amazon
         $patterns = [
-            '/\/dp\/([A-Z0-9]{10})/',
-            '/\/product\/([A-Z0-9]{10})/',
-            '/\/gp\/product\/([A-Z0-9]{10})/',
-            '/\/[^\/]*\/([A-Z0-9]{10})/',
+            '/\/dp\/([A-Z0-9]{10})/',           // Desktop: /dp/ASIN
+            '/\/product\/([A-Z0-9]{10})/',      // Desktop: /product/ASIN
+            '/\/gp\/product\/([A-Z0-9]{10})/',  // Desktop: /gp/product/ASIN
+            '/\/gp\/aw\/d\/([A-Z0-9]{10})/',    // 📱 Mobile: /gp/aw/d/ASIN
+            '/\/aw\/d\/([A-Z0-9]{10})/',        // 📱 Mobile court
+            '/\/[^\/]*\/([A-Z0-9]{10})/',       // Pattern générique
         ];
 
         foreach ($patterns as $pattern) {
@@ -170,157 +213,833 @@ class AmazonScrapingService
     }
 
     /**
-     * Scrape product data using multiple methods
+     * Extract ALL product data from HTML
      */
-    private function scrapeProductData(string $url, ?string $asin): array
+    private function extractAllProductData(string $html, string $url, string $asin, string $marketplace, string $country): array
     {
-        // Méthode 1: Scraping HTML direct (priorité)
-        $htmlData = $this->scrapeViaHtml($url);
-        if ($htmlData && $this->isRichData($htmlData)) {
-            return $htmlData;
-        }
-
-        // Méthode 2: Utiliser l'API Amazon (si disponible et ASIN fourni)
-        if ($asin) {
-            $apiData = $this->scrapeViaApi($asin, $url);
-            if ($apiData && $this->isRichData($apiData)) {
-                return $apiData;
-            }
-
-            // Méthode 2b: Essayer la page mobile, souvent plus simple à parser
-            $mobileData = $this->scrapeViaMobile($asin, $url);
-            if ($mobileData && $this->isRichData($mobileData)) {
-                return $mobileData;
-            }
-        }
-
-        // Méthode 3: Données de base avec ASIN (fallback)
-        return $this->getBasicProductData($url, $asin);
-    }
-
-    /**
-     * Scraping via page mobile Amazon (gp/aw)
-     */
-    private function scrapeViaMobile(string $asin, ?string $originalUrl = null): ?array
-    {
-        try {
-            $baseUrl = $this->getAmazonBaseUrl($originalUrl);
-            $mobileUrl = "{$baseUrl}/gp/aw/d/{$asin}";
-            $response = Http::withHeaders([
-                'User-Agent' => $this->userAgent,
-                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language' => 'en-US,en;q=0.5',
-                'Connection' => 'keep-alive',
-            ])->timeout(20)->get($mobileUrl);
-
-            if ($response->successful()) {
-                $data = $this->parseHtmlResponse($response->body(), $mobileUrl);
-                // Injecter l'ASIN si manquant
-                if (!isset($data['asin'])) {
-                    $data['asin'] = $asin;
-                }
-                return $data;
-            }
-        } catch (Exception $e) {
-            Log::warning('Mobile HTML scraping failed: ' . $e->getMessage());
-        }
-
-        return null;
-    }
-
-    /**
-     * Déterminer si les données contiennent des informations utiles (plus que l'ASIN seul)
-     */
-    private function isRichData(array $data): bool
-    {
-        return !empty($data['title']) || !empty($data['image_url']) || !empty($data['price']);
-    }
-
-    /**
-     * Scrape via API Amazon (méthode préférée)
-     */
-    private function scrapeViaApi(string $asin, ?string $originalUrl = null): ?array
-    {
-        try {
-            $baseUrl = $this->getAmazonBaseUrl($originalUrl);
-            // Utiliser l'API Amazon Product Advertising API ou une alternative
-            $response = Http::withHeaders([
-                'User-Agent' => $this->userAgent,
-                'Accept' => 'application/json',
-            ])->timeout(10)->get("{$baseUrl}/dp/{$asin}");
-
-            if ($response->successful()) {
-                $apiUrl = "{$baseUrl}/dp/{$asin}";
-                return $this->parseApiResponse($response->body(), $asin, $apiUrl);
-            }
-        } catch (Exception $e) {
-            Log::warning('API scraping failed: ' . $e->getMessage());
-        }
-
-        return null;
-    }
-
-    /**
-     * Scrape via HTML parsing
-     */
-    private function scrapeViaHtml(string $url): ?array
-    {
-        try {
-            // Si c'est une URL raccourcie, suivre la redirection d'abord
-            if (strpos($url, 'a.co') !== false || strpos($url, 'amzn.eu') !== false || strpos($url, 'amzn.to') !== false || strpos($url, 'amzn.com') !== false) {
-                $url = $this->resolveShortUrl($url);
-                if (!$url) {
-                    return null;
-                }
-            }
-
-            $response = Http::withHeaders([
-                'User-Agent' => $this->userAgent,
-                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language' => 'en-US,en;q=0.5',
-                'Accept-Encoding' => 'gzip, deflate',
-                'Connection' => 'keep-alive',
-            ])->timeout(20)->get($url);
-
-            if ($response->successful()) {
-                return $this->parseHtmlResponse($response->body(), $url);
-            }
-        } catch (Exception $e) {
-            Log::warning('HTML scraping failed: ' . $e->getMessage());
-        }
-
-        return null;
-    }
-
-    /**
-     * Parse API response
-     */
-    private function parseApiResponse(string $html, string $asin, ?string $url = null): array
-    {
-        // Construire l'URL si elle n'est pas fournie
-        if (!$url) {
-            $url = "https://www.amazon.com/dp/{$asin}";
-        }
-        // Parser le HTML pour extraire les informations
-        return $this->parseHtmlResponse($html, $url);
-    }
-
-    /**
-     * Parse HTML response
-     */
-    private function parseHtmlResponse(string $html, string $url): array
-    {
-        $marketplace = $this->extractMarketplaceFromUrl($url);
-        $data = [
-            'asin' => $this->extractAsinFromUrl($url),
+        return [
+            // BASIC INFO
+            'asin' => $asin,
+            'amazon_url' => $url,
+            'marketplace' => $marketplace,
+            'country' => $country,
+            
+            // PRODUCT NAME
             'title' => $this->extractTitle($html),
-            'price' => $this->extractPrice($html, $marketplace),
-            'image_url' => $this->extractImageUrl($html),
-            'description' => $this->extractDescription($html),
+            'name' => $this->extractTitle($html),
+            
+            // PRICING
+            'price' => $this->extractPrice($html, $url),
+            'current_price' => $this->extractPrice($html, $url),
+            'original_price' => $this->extractOriginalPrice($html),
+            'currency' => $this->getCurrencyFromMarketplace($marketplace),
+            'discount_percentage' => $this->calculateDiscount(
+                $this->extractOriginalPrice($html),
+                $this->extractPrice($html)
+            ),
+            
+            // RATINGS & REVIEWS ⭐
+            'rating' => $this->extractRating($html),
+            'stars' => $this->extractRating($html),
+            'review_count' => $this->extractReviewCount($html),
+            'number_of_reviews' => $this->extractReviewCount($html),
+            
+            // AVAILABILITY & STOCK 📦
             'availability' => $this->extractAvailability($html),
+            'in_stock' => $this->isInStock($html),
+            'stock_quantity' => $this->extractStockQuantity($html),
+            'stock_status' => $this->getStockStatus($html),
+            
+            // CATEGORIES 🏷️
+            'category' => $this->extractMainCategory($html),
+            'categories' => $this->extractAllCategories($html),
+            'category_path' => $this->extractCategoryPath($html),
+            
+            // IMAGES & MEDIA
+            'image_url' => $this->extractMainImage($html),
+            'images' => $this->extractAllImages($html),
+            
+            // ADDITIONAL INFO
+            'description' => $this->extractDescription($html),
+            'features' => $this->extractFeatures($html),
+            'brand' => $this->extractBrand($html),
+            'seller' => $this->extractSeller($html),
+            'is_prime' => $this->isPrimeEligible($html),
+            
+            // METADATA
+            'scraped_at' => now()->toIso8601String(),
+        ];
+    }
+
+    /**
+     * Extract product title/name (COMPLET)
+     */
+    private function extractTitle(string $html): ?string
+    {
+        $patterns = [
+            '/<span[^>]*id="productTitle"[^>]*>(.*?)<\/span>/is',
+            '/<title>(.*?)<\/title>/is',
+            '/<h1[^>]*class="[^"]*product-title[^"]*"[^>]*>(.*?)<\/h1>/is',
+            '/<h1[^>]*>(.*?)<\/h1>/is',
         ];
 
-        return array_filter($data); // Supprimer les valeurs nulles
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $title = trim(strip_tags($matches[1]));
+                $title = html_entity_decode($title, ENT_QUOTES, 'UTF-8');
+                $title = preg_replace('/\s+/', ' ', $title);
+                $title = preg_replace('/\s*[:|]\s*Amazon\..*$/i', '', $title);
+                $title = preg_replace('/\s*-\s*Amazon\..*$/i', '', $title);
+                
+                if (!empty($title) && strlen($title) > 10) {
+                    return substr($title, 0, 500);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract rating (nombre d'étoiles) ⭐
+     */
+    private function extractRating(string $html): ?float
+    {
+        $patterns = [
+            '/<span[^>]*class="[^"]*a-icon-alt[^"]*"[^>]*>([0-9.,]+)\s*(?:out of|sur|von|su|de)\s*(?:5|cinco)/i',
+            '/"ratingValue"\s*:\s*"?([0-9.]+)"?/i',
+            '/data-rating="([0-9.]+)"/i',
+            '/<span[^>]*class="[^"]*rating[^"]*"[^>]*>([0-9.,]+)/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $rating = str_replace(',', '.', $matches[1]);
+                $rating = floatval($rating);
+                
+                if ($rating >= 0 && $rating <= 5) {
+                    return round($rating, 1);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract review count (nombre d'avis) 💬
+     */
+    private function extractReviewCount(string $html): ?int
+    {
+        $patterns = [
+            '/<span[^>]*id="acrCustomerReviewText"[^>]*>([0-9,.\s]+)/i',
+            '/"reviewCount"\s*:\s*"?([0-9,]+)"?/i',
+            '/([0-9,.\s]+)\s*(?:ratings?|reviews?|évaluations?|avis|Bewertungen?|recensioni)/i',
+            '/<a[^>]*href="[^"]*#customerReviews[^"]*"[^>]*>([0-9,.\s]+)/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $count = preg_replace('/[^0-9]/', '', $matches[1]);
+                $count = intval($count);
+                
+                if ($count > 0 && $count < 10000000) {
+                    return $count;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract stock quantity (nombre en stock) 📦
+     */
+    private function extractStockQuantity(string $html): ?int
+    {
+        $patterns = [
+            '/Only\s+(\d+)\s+left\s+in\s+stock/i',
+            '/Plus\s+que\s+(\d+)\s+en\s+stock/i',
+            '/Noch\s+(\d+)\s+auf\s+Lager/i',
+            '/Solo\s+(\d+)\s+disponibles?/i',
+            '/Rimangono\s+solo\s+(\d+)/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $quantity = intval($matches[1]);
+                
+                if ($quantity > 0 && $quantity < 1000) {
+                    return $quantity;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Check if product is in stock
+     */
+    private function isInStock(string $html): bool
+    {
+        $inStockIndicators = [
+            'in stock', 'en stock', 'auf lager', 'disponible',
+            'available', 'add to cart', 'ajouter au panier',
+            'in den einkaufswagen', 'aggiungi al carrello',
+        ];
+
+        $outOfStockIndicators = [
+            'out of stock', 'rupture de stock', 'non disponible',
+            'currently unavailable', 'actuellement indisponible',
+            'nicht verfügbar', 'non disponibile',
+        ];
+
+        $htmlLower = strtolower($html);
+
+        foreach ($outOfStockIndicators as $indicator) {
+            if (str_contains($htmlLower, $indicator)) {
+                return false;
+            }
+        }
+
+        foreach ($inStockIndicators as $indicator) {
+            if (str_contains($htmlLower, $indicator)) {
+                return true;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Get stock status text
+     */
+    private function getStockStatus(string $html): string
+    {
+        if (!$this->isInStock($html)) {
+            return 'out_of_stock';
+        }
+
+        $quantity = $this->extractStockQuantity($html);
+        if ($quantity !== null) {
+            if ($quantity <= 5) {
+                return 'low_stock';
+            }
+            return 'in_stock_limited';
+        }
+
+        return 'in_stock';
+    }
+
+    /**
+     * Extract availability text
+     */
+    private function extractAvailability(string $html): ?string
+    {
+        $patterns = [
+            '/<span[^>]*id="availability"[^>]*>(.*?)<\/span>/s',
+            '/<div[^>]*id="availability"[^>]*>(.*?)<\/div>/s',
+            '/class="[^"]*availability[^"]*"[^>]*>(.*?)<\/(?:span|div)>/is',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $availability = trim(strip_tags($matches[1]));
+                $availability = preg_replace('/\s+/', ' ', $availability);
+                
+                if (!empty($availability) && strlen($availability) > 3) {
+                    return substr($availability, 0, 255);
+                }
+            }
+        }
+
+        return $this->isInStock($html) ? 'In Stock' : 'Out of Stock';
+    }
+
+    /**
+     * Extract main category 🏷️
+     */
+    private function extractMainCategory(string $html): ?string
+    {
+        $categories = $this->extractAllCategories($html);
+        
+        if (!empty($categories)) {
+            return end($categories);
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract ALL categories (breadcrumb) 🏷️
+     */
+    private function extractAllCategories(string $html): array
+    {
+        $categories = [];
+
+        $patterns = [
+            '/<div[^>]*id="wayfinding-breadcrumbs_feature_div"[^>]*>(.*?)<\/div>/is',
+            '/<ul[^>]*class="[^"]*a-breadcrumb[^"]*"[^>]*>(.*?)<\/ul>/is',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                preg_match_all('/<a[^>]+>([^<]+)<\/a>/i', $matches[1], $links);
+                
+                foreach ($links[1] as $category) {
+                    $category = trim(strip_tags($category));
+                    if (!empty($category) && strlen($category) > 2 && $category !== '›') {
+                        $categories[] = $category;
+                    }
+                }
+                
+                if (!empty($categories)) {
+                    break;
+                }
+            }
+        }
+
+        return array_values(array_unique($categories));
+    }
+
+    /**
+     * Extract category path (chemin complet)
+     */
+    private function extractCategoryPath(string $html): ?string
+    {
+        $categories = $this->extractAllCategories($html);
+        
+        if (!empty($categories)) {
+            return implode(' > ', $categories);
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract price
+     */
+    private function extractPrice(string $html, ?string $url = null): ?float
+    {
+        // Si l'URL n'est pas fournie, essayer d'extraire depuis le HTML
+        $marketplace = $url ? $this->extractMarketplaceFromUrl($url) : 'US';
+        $currencySymbols = $this->getCurrencySymbolsForMarketplace($marketplace);
+        
+        // 1. Essayer d'extraire depuis les données JSON-LD (plus fiable)
+        $price = $this->extractPriceFromJsonLd($html);
+        if ($price !== null) {
+            return $price;
+        }
+
+        // 2. Essayer d'extraire depuis les données JavaScript
+        $price = $this->extractPriceFromJavaScript($html);
+        if ($price !== null) {
+            return $price;
+        }
+
+        // 3. Patterns HTML classiques
+        $patterns = [
+            // Format avec whole et fraction séparés
+            '/<span[^>]*class="[^"]*a-price-whole[^"]*"[^>]*>([0-9.,]+)<\/span>\s*<span[^>]*class="[^"]*a-price-fraction[^"]*"[^>]*>([0-9]+)<\/span>/is',
+            '/<span[^>]*class="[^"]*a-price-whole[^"]*"[^>]*>([0-9.,]+)<\/span>/is',
+            // Format avec a-offscreen (prix caché mais accessible)
+            '/<span[^>]*class="[^"]*a-price[^"]*"[^>]*>.*?<span[^>]*class="[^"]*a-offscreen[^"]*"[^>]*>([^<]+)<\/span>/is',
+            '/<span[^>]*class="[^"]*a-offscreen[^"]*"[^>]*>([^<]+)<\/span>/is',
+            // IDs spécifiques
+            '/<span[^>]*id="priceblock_ourprice"[^>]*>([^<]+)<\/span>/is',
+            '/<span[^>]*id="priceblock_dealprice"[^>]*>([^<]+)<\/span>/is',
+            '/<span[^>]*id="priceblock_saleprice"[^>]*>([^<]+)<\/span>/is',
+            '/<span[^>]*id="price_inside_buybox"[^>]*>([^<]+)<\/span>/is',
+            '/<span[^>]*id="priceblock_buybox"[^>]*>([^<]+)<\/span>/is',
+            // Format EU avec data-a-color
+            '/<span[^>]*data-a-color="price"[^>]*>.*?<span[^>]*class="[^"]*a-offscreen[^"]*"[^>]*>([^<]+)<\/span>/is',
+            // Format avec data-price
+            '/data-price="([0-9.,]+)"/i',
+            '/data-price-amount="([0-9.,]+)"/i',
+            // Format générique avec symboles de devise
+            '/[' . implode('', array_map('preg_quote', $currencySymbols)) . ']\s*([0-9.,]+)/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                if (isset($matches[2])) {
+                    $priceStr = $matches[1] . '.' . $matches[2];
+                } else {
+                    $priceStr = $matches[1];
+                }
+                
+                $price = $this->parsePriceString($priceStr);
+                
+                if ($price !== null && $price > 0 && $price < 1000000) {
+                    Log::debug("Price extracted via pattern: {$price}");
+                    return $price;
+                }
+            }
+        }
+
+        Log::warning("Could not extract price from HTML");
+        return null;
+    }
+
+    /**
+     * Extract price from JSON-LD structured data
+     */
+    private function extractPriceFromJsonLd(string $html): ?float
+    {
+        // Chercher les données JSON-LD
+        if (preg_match('/<script[^>]*type="application\/ld\+json"[^>]*>(.*?)<\/script>/is', $html, $matches)) {
+            $jsonData = json_decode($matches[1], true);
+            
+            if (is_array($jsonData)) {
+                // Essayer d'extraire le prix depuis différentes structures
+                if (isset($jsonData['offers']['price'])) {
+                    $price = $this->parsePriceString((string)$jsonData['offers']['price']);
+                    if ($price !== null) {
+                        return $price;
+                    }
+                }
+                
+                if (isset($jsonData['offers'][0]['price'])) {
+                    $price = $this->parsePriceString((string)$jsonData['offers'][0]['price']);
+                    if ($price !== null) {
+                        return $price;
+                    }
+                }
+                
+                if (isset($jsonData['price'])) {
+                    $price = $this->parsePriceString((string)$jsonData['price']);
+                    if ($price !== null) {
+                        return $price;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract price from JavaScript data
+     */
+    private function extractPriceFromJavaScript(string $html): ?float
+    {
+        // Chercher dans les données JavaScript embarquées
+        $patterns = [
+            '/"price"\s*:\s*"?([0-9.,]+)"?/i',
+            '/"priceAmount"\s*:\s*"?([0-9.,]+)"?/i',
+            '/"displayPrice"\s*:\s*"?([0-9.,]+)"?/i',
+            '/"buyingPrice"\s*:\s*"?([0-9.,]+)"?/i',
+            '/twister\.price\s*=\s*"?([0-9.,]+)"?/i',
+            '/var\s+price\s*=\s*"?([0-9.,]+)"?/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $price = $this->parsePriceString($matches[1]);
+                if ($price !== null && $price > 0) {
+                    Log::debug("Price extracted from JavaScript: {$price}");
+                    return $price;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract original price (before discount)
+     */
+    private function extractOriginalPrice(string $html): ?float
+    {
+        $patterns = [
+            '/<span[^>]*class="[^"]*a-price[^"]*a-text-price[^"]*"[^>]*>.*?<span[^>]*class="[^"]*a-offscreen[^"]*"[^>]*>([^<]+)<\/span>/is',
+            '/<span[^>]*data-a-strike="true"[^>]*>.*?<span[^>]*class="[^"]*a-offscreen[^"]*"[^>]*>([^<]+)<\/span>/is',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $price = $this->parsePriceString($matches[1]);
+                
+                if ($price !== null && $price > 0) {
+                    return $price;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Parse price string to float
+     */
+    private function parsePriceString(string $priceStr): ?float
+    {
+        $priceStr = preg_replace('/[^\d.,\s]/', '', $priceStr);
+        $priceStr = trim($priceStr);
+
+        if (strpos($priceStr, ',') !== false && strpos($priceStr, '.') !== false) {
+            $priceStr = str_replace(['.', ','], ['', '.'], $priceStr);
+        } elseif (strpos($priceStr, ',') !== false) {
+            $parts = explode(',', $priceStr);
+            if (count($parts) == 2 && strlen($parts[1]) <= 2) {
+                $priceStr = str_replace(',', '.', $priceStr);
+            } else {
+                $priceStr = str_replace(',', '', $priceStr);
+            }
+        }
+
+        $price = floatval($priceStr);
+        
+        return $price > 0 ? $price : null;
+    }
+
+    /**
+     * Calculate discount percentage
+     */
+    private function calculateDiscount(?float $originalPrice, ?float $currentPrice): ?float
+    {
+        if ($originalPrice && $currentPrice && $originalPrice > $currentPrice) {
+            $discount = (($originalPrice - $currentPrice) / $originalPrice) * 100;
+            return round($discount, 2);
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract main image
+     */
+    private function extractMainImage(string $html): ?string
+    {
+        // 1. Essayer d'extraire depuis les données JSON-LD
+        $imageUrl = $this->extractImageFromJsonLd($html);
+        if ($imageUrl !== null) {
+            return $imageUrl;
+        }
+
+        // 2. Essayer d'extraire depuis les données JavaScript
+        $imageUrl = $this->extractImageFromJavaScript($html);
+        if ($imageUrl !== null) {
+            return $imageUrl;
+        }
+
+        // 3. Patterns HTML classiques
+        $patterns = [
+            // ID landingImage (le plus courant)
+            '/<img[^>]*id="landingImage"[^>]*src="([^"]*)"[^>]*>/i',
+            '/<img[^>]*id="landingImage"[^>]*data-src="([^"]*)"[^>]*>/i',
+            '/<img[^>]*id="landingImage"[^>]*data-old-hires="([^"]*)"[^>]*>/i',
+            '/<img[^>]*id="landingImage"[^>]*data-a-dynamic-image="([^"]*)"[^>]*>/i',
+            // Classe a-dynamic-image
+            '/<img[^>]*class="[^"]*a-dynamic-image[^"]*"[^>]*src="([^"]*)"[^>]*>/i',
+            '/<img[^>]*class="[^"]*a-dynamic-image[^"]*"[^>]*data-src="([^"]*)"[^>]*>/i',
+            '/<img[^>]*class="[^"]*a-dynamic-image[^"]*"[^>]*data-old-hires="([^"]*)"[^>]*>/i',
+            // ID main-image
+            '/<img[^>]*id="main-image"[^>]*src="([^"]*)"[^>]*>/i',
+            '/<img[^>]*id="main-image"[^>]*data-src="([^"]*)"[^>]*>/i',
+            // ID main-image-container
+            '/<div[^>]*id="main-image-container"[^>]*>.*?<img[^>]*src="([^"]*)"[^>]*>/is',
+            // Format avec data-a-dynamic-image (JSON)
+            '/<img[^>]*data-a-dynamic-image="([^"]*)"[^>]*>/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $imageUrl = str_replace('&amp;', '&', trim($matches[1]));
+                
+                // Si c'est du JSON dans data-a-dynamic-image, parser
+                if (str_starts_with($imageUrl, '{')) {
+                    $imageData = json_decode($imageUrl, true);
+                    if (is_array($imageData) && !empty($imageData)) {
+                        // Prendre la première image (la plus grande)
+                        $imageUrl = array_key_first($imageData);
+                    }
+                }
+                
+                if (!empty($imageUrl) && 
+                    !str_contains($imageUrl, 'sprite') &&
+                    !str_contains($imageUrl, 'placeholder') &&
+                    !str_contains($imageUrl, '1x1') &&
+                    (filter_var($imageUrl, FILTER_VALIDATE_URL) || str_starts_with($imageUrl, 'http'))) {
+                    Log::debug("Image extracted: {$imageUrl}");
+                    return $imageUrl;
+                }
+            }
+        }
+
+        Log::warning("Could not extract image from HTML");
+        return null;
+    }
+
+    /**
+     * Extract image from JSON-LD structured data
+     */
+    private function extractImageFromJsonLd(string $html): ?string
+    {
+        // Chercher les données JSON-LD
+        if (preg_match('/<script[^>]*type="application\/ld\+json"[^>]*>(.*?)<\/script>/is', $html, $matches)) {
+            $jsonData = json_decode($matches[1], true);
+            
+            if (is_array($jsonData)) {
+                // Essayer d'extraire l'image depuis différentes structures
+                if (isset($jsonData['image'])) {
+                    if (is_string($jsonData['image'])) {
+                        return $jsonData['image'];
+                    } elseif (is_array($jsonData['image']) && !empty($jsonData['image'])) {
+                        return is_string($jsonData['image'][0]) ? $jsonData['image'][0] : $jsonData['image'][0]['url'] ?? null;
+                    }
+                }
+                
+                if (isset($jsonData['offers']['image'])) {
+                    return $jsonData['offers']['image'];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract image from JavaScript data
+     */
+    private function extractImageFromJavaScript(string $html): ?string
+    {
+        // Chercher dans les données JavaScript embarquées
+        $patterns = [
+            '/"mainImage"\s*:\s*"([^"]+)"/i',
+            '/"largeImage"\s*:\s*"([^"]+)"/i',
+            '/"hiResImage"\s*:\s*"([^"]+)"/i',
+            '/"imageUrl"\s*:\s*"([^"]+)"/i',
+            '/"primaryImage"\s*:\s*"([^"]+)"/i',
+            '/colorImages.*?"initial".*?"hiRes"\s*:\s*"([^"]+)"/is',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $imageUrl = str_replace('\\/', '/', $matches[1]);
+                $imageUrl = str_replace('&amp;', '&', trim($imageUrl));
+                
+                if (!empty($imageUrl) && 
+                    !str_contains($imageUrl, 'sprite') &&
+                    !str_contains($imageUrl, 'placeholder') &&
+                    (filter_var($imageUrl, FILTER_VALIDATE_URL) || str_starts_with($imageUrl, 'http'))) {
+                    Log::debug("Image extracted from JavaScript: {$imageUrl}");
+                    return $imageUrl;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract all product images
+     */
+    private function extractAllImages(string $html): array
+    {
+        $images = [];
+
+        // 1. Extraire depuis colorImages JSON
+        if (preg_match('/"colorImages":\s*\{[^}]*"initial":\s*\[(.*?)\]/s', $html, $matches)) {
+            preg_match_all('/"hiRes"\s*:\s*"(https?:\/\/[^"]+)"/i', $matches[1], $imageMatches);
+            $images = array_merge($images, $imageMatches[1]);
+            
+            // Aussi chercher large et medium
+            preg_match_all('/"large"\s*:\s*"(https?:\/\/[^"]+)"/i', $matches[1], $imageMatches);
+            $images = array_merge($images, $imageMatches[1]);
+        }
+
+        // 2. Extraire depuis data-a-dynamic-image (JSON)
+        if (preg_match_all('/data-a-dynamic-image="([^"]+)"/i', $html, $matches)) {
+            foreach ($matches[1] as $jsonStr) {
+                $jsonStr = html_entity_decode($jsonStr, ENT_QUOTES, 'UTF-8');
+                $imageData = json_decode($jsonStr, true);
+                if (is_array($imageData)) {
+                    $images = array_merge($images, array_keys($imageData));
+                }
+            }
+        }
+
+        // 3. Extraire depuis data-old-hires
+        preg_match_all('/<img[^>]*data-old-hires="(https?:\/\/[^"]+)"/i', $html, $matches);
+        $images = array_merge($images, $matches[1]);
+
+        // 4. Extraire depuis les images de la galerie
+        preg_match_all('/<img[^>]*class="[^"]*a-dynamic-image[^"]*"[^>]*src="(https?:\/\/[^"]+)"/i', $html, $matches);
+        $images = array_merge($images, $matches[1]);
+
+        // 5. Extraire depuis les données JavaScript
+        if (preg_match('/"imageGalleryData":\s*\[(.*?)\]/s', $html, $matches)) {
+            preg_match_all('/"mainUrl"\s*:\s*"(https?:\/\/[^"]+)"/i', $matches[1], $imageMatches);
+            $images = array_merge($images, $imageMatches[1]);
+        }
+
+        // Nettoyer et dédupliquer
+        $images = array_map(function($url) {
+            return str_replace(['&amp;', '\\/'], ['&', '/'], trim($url));
+        }, $images);
+
+        $images = array_filter($images, function($url) {
+            return !empty($url) && 
+                   !str_contains($url, 'sprite') &&
+                   !str_contains($url, 'placeholder') &&
+                   !str_contains($url, '1x1') &&
+                   (filter_var($url, FILTER_VALIDATE_URL) || str_starts_with($url, 'http'));
+        });
+
+        return array_values(array_unique($images));
+    }
+
+    /**
+     * Extract description
+     */
+    private function extractDescription(string $html): ?string
+    {
+        $patterns = [
+            '/<div[^>]*id="feature-bullets"[^>]*>(.*?)<\/div>/s',
+            '/<div[^>]*id="productDescription"[^>]*>(.*?)<\/div>/s',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $description = trim(strip_tags($matches[1]));
+                $description = preg_replace('/\s+/', ' ', $description);
+                
+                if (!empty($description) && strlen($description) > 20) {
+                    return substr($description, 0, 1000);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract product features (bullet points)
+     */
+    private function extractFeatures(string $html): array
+    {
+        $features = [];
+
+        if (preg_match('/<div[^>]*id="feature-bullets"[^>]*>(.*?)<\/div>/s', $html, $matches)) {
+            preg_match_all('/<span[^>]*class="[^"]*a-list-item[^"]*"[^>]*>([^<]+)<\/span>/i', $matches[1], $items);
+            
+            foreach ($items[1] as $item) {
+                $item = trim(strip_tags($item));
+                if (!empty($item) && strlen($item) > 10) {
+                    $features[] = $item;
+                }
+            }
+        }
+
+        return $features;
+    }
+
+    /**
+     * Extract brand
+     */
+    private function extractBrand(string $html): ?string
+    {
+        $patterns = [
+            '/<a[^>]*id="bylineInfo"[^>]*>([^<]+)<\/a>/i',
+            '/"brand"\s*:\s*"([^"]+)"/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $brand = trim(str_replace(['Visit the', 'Store', 'Brand:'], '', $matches[1]));
+                if (!empty($brand)) {
+                    return $brand;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract seller
+     */
+    private function extractSeller(string $html): ?string
+    {
+        $patterns = [
+            '/<a[^>]*id="sellerProfileTriggerId"[^>]*>([^<]+)<\/a>/i',
+            '/Ships\s+from\s+and\s+sold\s+by\s+<a[^>]*>([^<]+)<\/a>/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                return trim($matches[1]);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Check if Prime eligible
+     */
+    private function isPrimeEligible(string $html): bool
+    {
+        return (bool) preg_match('/<i[^>]*class="[^"]*a-icon-prime[^"]*"/i', $html);
+    }
+
+    /**
+     * Fetch product page HTML
+     */
+    private function fetchProductPage(string $url): string
+    {
+        $userAgent = $this->userAgents[array_rand($this->userAgents)];
+        
+        $response = Http::withHeaders([
+            'User-Agent' => $userAgent,
+            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language' => 'en-US,en;q=0.5',
+            'Accept-Encoding' => 'gzip, deflate, br',
+            'DNT' => '1',
+            'Connection' => 'keep-alive',
+            'Upgrade-Insecure-Requests' => '1',
+        ])->timeout(30)->get($url);
+
+        if (!$response->successful()) {
+            throw new Exception("HTTP request failed with status: {$response->status()}");
+        }
+
+        $html = $response->body();
+
+        if ($this->isCaptchaPage($html)) {
+            throw new Exception('Amazon detected automated request (captcha). Please try again later.');
+        }
+
+        return $html;
+    }
+
+    /**
+     * Check if captcha page
+     */
+    private function isCaptchaPage(string $html): bool
+    {
+        $indicators = ['captcha', 'robot check', 'Type the characters you see'];
+        $htmlLower = strtolower($html);
+        
+        foreach ($indicators as $indicator) {
+            if (str_contains($htmlLower, strtolower($indicator))) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    /**
+     * Validate product data
+     */
+    private function isValidProductData(array $data): bool
+    {
+        return !empty($data['title']) && 
+               !empty($data['asin']) &&
+               !empty($data['marketplace']);
     }
 
     /**
@@ -331,6 +1050,18 @@ class AmazonScrapingService
         $host = parse_url($url, PHP_URL_HOST) ?? '';
         $host = strtolower($host);
         
+        // Check short URLs first
+        if (str_contains($host, 'amzn.com.br')) return 'BR';
+        if (str_contains($host, 'amzn.co.uk')) return 'UK';
+        if (str_contains($host, 'amzn.de')) return 'DE';
+        if (str_contains($host, 'amzn.fr')) return 'FR';
+        if (str_contains($host, 'amzn.it')) return 'IT';
+        if (str_contains($host, 'amzn.es')) return 'ES';
+        if (str_contains($host, 'amzn.in')) return 'IN';
+        if (str_contains($host, 'amzn.ca')) return 'CA';
+        if (str_contains($host, 'amzn.eu')) return 'EU';
+        
+        // Check specific domains
         if (str_contains($host, 'amazon.com.br')) return 'BR';
         if (str_contains($host, 'amazon.co.uk')) return 'UK';
         if (str_contains($host, 'amazon.de')) return 'DE';
@@ -346,411 +1077,85 @@ class AmazonScrapingService
     }
 
     /**
-     * Extract product title
+     * Get country name from marketplace
      */
-    private function extractTitle(string $html): ?string
+    private function getCountryFromMarketplace(string $marketplace): string
     {
-        $patterns = [
-            '/<span[^>]*id="productTitle"[^>]*>(.*?)<\/span>/s',
-            '/<h1[^>]*class="[^"]*product-title[^"]*"[^>]*>(.*?)<\/h1>/s',
-            '/<title[^>]*>(.*?)<\/title>/s',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $html, $matches)) {
-                $title = trim(strip_tags($matches[1]));
-                if (!empty($title) && strlen($title) > 10) {
-                    return $title;
-                }
-            }
-        }
-
-        return null;
+        return match ($marketplace) {
+            'US' => 'United States',
+            'UK' => 'United Kingdom',
+            'DE' => 'Germany',
+            'FR' => 'France',
+            'IT' => 'Italy',
+            'ES' => 'Spain',
+            'BR' => 'Brazil',
+            'IN' => 'India',
+            'CA' => 'Canada',
+            'EU' => 'Europe',
+            default => 'United States',
+        };
     }
 
     /**
-     * Extract product price with marketplace-aware currency detection
+     * Get currency from marketplace
      */
-    private function extractPrice(string $html, string $marketplace = 'US'): ?float
+    private function getCurrencyFromMarketplace(string $marketplace): string
     {
-        // Définir les symboles de devise par marketplace
-        $currencySymbols = [
+        return match ($marketplace) {
+            'FR', 'DE', 'ES', 'IT', 'EU' => 'EUR',
+            'UK' => 'GBP',
+            'CA' => 'CAD',
+            'BR' => 'BRL',
+            'IN' => 'INR',
+            default => 'USD',
+        };
+    }
+
+    /**
+     * Get currency symbols for marketplace
+     */
+    private function getCurrencySymbolsForMarketplace(string $marketplace): array
+    {
+        return match ($marketplace) {
             'US' => ['$', 'USD'],
             'UK' => ['£', 'GBP', 'p'],
-            'DE' => ['€', 'EUR'],
-            'FR' => ['€', 'EUR'],
-            'IT' => ['€', 'EUR'],
-            'ES' => ['€', 'EUR'],
-            'EU' => ['€', 'EUR'],
+            'DE', 'FR', 'IT', 'ES', 'EU' => ['€', 'EUR'],
             'BR' => ['R$', 'BRL'],
             'IN' => ['₹', 'INR', 'Rs'],
             'CA' => ['$', 'CAD', 'C$'],
-        ];
+            default => ['$', 'USD'],
+        };
+    }
 
-        $symbols = $currencySymbols[$marketplace] ?? ['$', 'USD'];
-        
-        // Méthode 1: Extraire depuis JSON-LD (structured data)
-        $price = $this->extractPriceFromJsonLd($html, $symbols);
-        if ($price !== null) {
-            return $price;
-        }
+    /**
+     * Check if short URL
+     */
+    private function isShortUrl(string $url): bool
+    {
+        return str_contains($url, 'a.co') || 
+               str_contains($url, 'amzn.to') || 
+               str_contains($url, 'amzn.eu') ||
+               str_contains($url, 'amzn.com');
+    }
 
-        // Méthode 2: Extraire depuis les attributs data-* d'Amazon
-        $price = $this->extractPriceFromDataAttributes($html);
-        if ($price !== null) {
-            return $price;
-        }
+    /**
+     * Resolve short URL
+     */
+    public function resolveShortUrl(string $shortUrl): ?string
+    {
+        try {
+            $response = Http::withHeaders([
+                'User-Agent' => $this->userAgents[0],
+            ])->timeout(10)->get($shortUrl);
 
-        // Méthode 3: Extraire depuis les IDs et classes spécifiques Amazon
-        $price = $this->extractPriceFromAmazonElements($html, $symbols);
-        if ($price !== null) {
-            return $price;
-        }
-
-        // Méthode 4: Patterns regex génériques avec symboles de devise
-        $price = $this->extractPriceFromRegex($html, $symbols);
-        if ($price !== null) {
-            return $price;
+            if ($response->successful()) {
+                return $response->effectiveUri();
+            }
+        } catch (Exception $e) {
+            Log::warning('Short URL resolution failed: ' . $e->getMessage());
         }
 
         return null;
-    }
-
-    /**
-     * Extract price from JSON-LD structured data
-     */
-    private function extractPriceFromJsonLd(string $html, array $symbols): ?float
-    {
-        // Chercher les scripts JSON-LD
-        if (preg_match_all('/<script[^>]*type=["\']application\/ld\+json["\'][^>]*>(.*?)<\/script>/is', $html, $matches)) {
-            foreach ($matches[1] as $jsonContent) {
-                $data = json_decode($jsonContent, true);
-                if ($data && isset($data['offers']['price'])) {
-                    $price = floatval($data['offers']['price']);
-                    if ($price > 0) {
-                        return $price;
-                    }
-                }
-                // Alternative structure
-                if ($data && isset($data['@graph'])) {
-                    foreach ($data['@graph'] as $item) {
-                        if (isset($item['offers']['price'])) {
-                            $price = floatval($item['offers']['price']);
-                            if ($price > 0) {
-                                return $price;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Extract price from Amazon data attributes
-     */
-    private function extractPriceFromDataAttributes(string $html): ?float
-    {
-        // Chercher dans les attributs data-a-dynamic-product
-        if (preg_match('/data-a-dynamic-product=["\']([^"\']*)["\']/', $html, $matches)) {
-            $json = html_entity_decode($matches[1], ENT_QUOTES | ENT_HTML5);
-            $data = json_decode($json, true);
-            if ($data && is_array($data)) {
-                foreach ($data as $asin => $productData) {
-                    if (isset($productData['price'])) {
-                        $price = floatval($productData['price']);
-                        if ($price > 0) {
-                            return $price;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Chercher dans data-asin-price
-        if (preg_match('/data-asin-price=["\']([^"\']+)["\']/', $html, $matches)) {
-            $price = floatval(str_replace([',', ' '], '', $matches[1]));
-            if ($price > 0) {
-                return $price;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Extract price from Amazon-specific HTML elements
-     */
-    private function extractPriceFromAmazonElements(string $html, array $symbols): ?float
-    {
-        // Patterns pour les IDs et classes spécifiques Amazon
-        $patterns = [
-            // Prix principal (id="priceblock_ourprice" ou id="priceblock_dealprice")
-            '/<span[^>]*id=["\']priceblock_(ourprice|dealprice|saleprice)["\'][^>]*>([^<]+)<\/span>/i',
-            // Prix dans a-price-whole et a-price-fraction
-            '/<span[^>]*class=["\'][^"\']*a-price-whole[^"\']*["\'][^>]*>([^<]+)<\/span>.*?<span[^>]*class=["\'][^"\']*a-price-fraction[^"\']*["\'][^>]*>([^<]+)<\/span>/is',
-            // Prix dans a-price avec a-offscreen (prix complet)
-            '/<span[^>]*class=["\'][^"\']*a-price[^"\']*["\'][^>]*>.*?<span[^>]*class=["\'][^"\']*a-offscreen[^"\']*["\'][^>]*>([^<]+)<\/span>/is',
-            // Prix dans a-price a-text-price
-            '/<span[^>]*class=["\'][^"\']*a-price[^"\']*a-text-price[^"\']*["\'][^>]*>.*?<span[^>]*>([^<]+)<\/span>/is',
-            // Prix dans le span avec class a-price-symbol + a-price-whole
-            '/<span[^>]*class=["\'][^"\']*a-price-symbol[^"\']*["\'][^>]*>([^<]+)<\/span>.*?<span[^>]*class=["\'][^"\']*a-price-whole[^"\']*["\'][^>]*>([^<]+)<\/span>/is',
-            // Prix avec data-a-color="price"
-            '/<span[^>]*data-a-color=["\']price["\'][^>]*>([^<]+)<\/span>/i',
-            // Prix dans twister-plus-price-data-price
-            '/<span[^>]*id=["\']twister-plus-price-data-price["\'][^>]*>([^<]+)<\/span>/i',
-            // Prix dans priceToPay
-            '/<span[^>]*id=["\']priceToPay["\'][^>]*>.*?<span[^>]*class=["\'][^"\']*a-offscreen[^"\']*["\'][^>]*>([^<]+)<\/span>/is',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $html, $matches)) {
-                // Si on a deux matches (whole + fraction), les combiner
-                if (count($matches) >= 3 && isset($matches[2]) && !empty(trim($matches[2]))) {
-                    $whole = $this->cleanPriceString($matches[1]);
-                    $fraction = $this->cleanPriceString($matches[2]);
-                    $price = $this->parsePriceString($whole . '.' . $fraction);
-                } else {
-                    $priceStr = $matches[count($matches) - 1];
-                    $price = $this->parsePriceString($priceStr);
-                }
-                
-                if ($price !== null && $price > 0) {
-                    return $price;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Clean price string by removing non-numeric characters except decimal separators
-     */
-    private function cleanPriceString(string $str): string
-    {
-        // Garder les chiffres, virgules et points
-        return preg_replace('/[^\d,.]/', '', trim($str));
-    }
-
-    /**
-     * Parse price string handling different formats (US: 1,234.56 vs EU: 1.234,56)
-     */
-    private function parsePriceString(string $priceStr): ?float
-    {
-        $priceStr = trim($priceStr);
-        if (empty($priceStr)) {
-            return null;
-        }
-
-        // Nettoyer la chaîne
-        $priceStr = $this->cleanPriceString($priceStr);
-        
-        // Détecter le format: si on a une virgule ET un point, déterminer lequel est le séparateur décimal
-        if (strpos($priceStr, ',') !== false && strpos($priceStr, '.') !== false) {
-            $lastComma = strrpos($priceStr, ',');
-            $lastDot = strrpos($priceStr, '.');
-            
-            // Le séparateur décimal est celui qui est le plus à droite
-            if ($lastComma > $lastDot) {
-                // Format européen: 1.234,56
-                $priceStr = str_replace('.', '', $priceStr); // Enlever les séparateurs de milliers
-                $priceStr = str_replace(',', '.', $priceStr); // Remplacer la virgule par un point
-            } else {
-                // Format US: 1,234.56
-                $priceStr = str_replace(',', '', $priceStr); // Enlever les séparateurs de milliers
-            }
-        } elseif (strpos($priceStr, ',') !== false) {
-            // Seulement une virgule - pourrait être format EU ou US avec virgule comme séparateur décimal
-            // Si la virgule est suivie de 2 chiffres, c'est probablement un séparateur décimal
-            if (preg_match('/,(\d{2})$/', $priceStr)) {
-                $priceStr = str_replace(',', '.', $priceStr);
-            } else {
-                // Sinon, c'est probablement un séparateur de milliers (format US avec virgule)
-                $priceStr = str_replace(',', '', $priceStr);
-            }
-        } elseif (strpos($priceStr, '.') !== false) {
-            // Seulement un point - pourrait être format US ou EU avec point comme séparateur décimal
-            // Si le point est suivi de 2 chiffres, c'est probablement un séparateur décimal
-            if (preg_match('/\.(\d{2})$/', $priceStr)) {
-                // Garder le point comme séparateur décimal
-            } else {
-                // Sinon, c'est probablement un séparateur de milliers (format EU avec point)
-                $priceStr = str_replace('.', '', $priceStr);
-            }
-        }
-
-        $price = floatval($priceStr);
-        return ($price > 0 && $price < 1000000) ? $price : null;
-    }
-
-    /**
-     * Extract price using regex patterns with currency symbols
-     */
-    private function extractPriceFromRegex(string $html, array $symbols): ?float
-    {
-        // Échapper les symboles pour regex
-        $symbolPattern = implode('|', array_map('preg_quote', $symbols));
-        
-        // Patterns pour différents formats de prix
-        $patterns = [
-            // Format: €12,99 ou €12.99 ou € 12,99
-            "/(?:{$symbolPattern})\s*([\d.,]+)/",
-            // Format: 12,99 € ou 12.99 €
-            "/([\d.,]+)\s*(?:{$symbolPattern})/",
-            // Format dans les classes price
-            "/class=[\"'][^\"']*price[^\"']*[\"'][^>]*>.*?(?:{$symbolPattern})?\s*([\d.,]+)/is",
-            // Format générique avec prix suivi de devise
-            "/([\d.,]+)\s*(?:{$symbolPattern})/",
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $html, $matches)) {
-                if (isset($matches[1])) {
-                    $priceStr = $matches[1];
-                    $price = $this->parsePriceString($priceStr);
-                    
-                    if ($price !== null && $price > 0 && $price < 1000000) {
-                        return $price;
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Extract product image URL
-     */
-    private function extractImageUrl(string $html): ?string
-    {
-        $patterns = [
-            // Patterns spécifiques Amazon pour l'image principale du produit
-            '/<img[^>]*id="landingImage"[^>]*src="([^"]*)"[^>]*>/i',
-            '/<img[^>]*id="landingImage"[^>]*data-src="([^"]*)"[^>]*>/i',
-            '/<img[^>]*id="landingImage"[^>]*data-old-hires="([^"]*)"[^>]*>/i',
-            // Patterns pour les images de produits Amazon
-            '/<img[^>]*class="[^"]*a-dynamic-image[^"]*"[^>]*src="([^"]*)"[^>]*>/i',
-            '/<img[^>]*class="[^"]*a-dynamic-image[^"]*"[^>]*data-src="([^"]*)"[^>]*>/i',
-            '/<img[^>]*class="[^"]*a-dynamic-image[^"]*"[^>]*data-old-hires="([^"]*)"[^>]*>/i',
-            // Patterns pour images de produits (éviter les sprites et icônes)
-            '/<img[^>]*src="([^"]*media-amazon[^"]*images[^"]*I[^"]*)"[^>]*>/i',
-            '/<img[^>]*data-src="([^"]*media-amazon[^"]*images[^"]*I[^"]*)"[^>]*>/i',
-            '/<img[^>]*data-old-hires="([^"]*media-amazon[^"]*images[^"]*I[^"]*)"[^>]*>/i',
-            // Patterns génériques pour images Amazon (éviter les sprites)
-            '/<img[^>]*src="([^"]*amazon[^"]*images[^"]*I[^"]*)"[^>]*>/i',
-            '/<img[^>]*data-src="([^"]*amazon[^"]*images[^"]*I[^"]*)"[^>]*>/i',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $html, $matches)) {
-                $imageUrl = trim($matches[1]);
-                // Nettoyer l'URL si nécessaire
-                $imageUrl = str_replace('&amp;', '&', $imageUrl);
-                
-                // Vérifier que ce n'est pas un sprite ou une icône
-                if (!empty($imageUrl) && 
-                    !strpos($imageUrl, 'sprite') && 
-                    !strpos($imageUrl, 'nav-') &&
-                    !strpos($imageUrl, 'icon') &&
-                    (filter_var($imageUrl, FILTER_VALIDATE_URL) || strpos($imageUrl, 'http') === 0)) {
-                    return $imageUrl;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Extract product description
-     */
-    private function extractDescription(string $html): ?string
-    {
-        $patterns = [
-            '/<div[^>]*id="feature-bullets"[^>]*>(.*?)<\/div>/s',
-            '/<div[^>]*class="[^"]*product-description[^"]*"[^>]*>(.*?)<\/div>/s',
-            '/<div[^>]*class="[^"]*a-section[^"]*"[^>]*>(.*?)<\/div>/s',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $html, $matches)) {
-                $description = trim(strip_tags($matches[1]));
-                if (!empty($description) && strlen($description) > 20) {
-                    return substr($description, 0, 1000); // Limiter à 1000 caractères
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Extract product availability
-     */
-    private function extractAvailability(string $html): ?string
-    {
-        $patterns = [
-            '/<span[^>]*id="availability"[^>]*>(.*?)<\/span>/s',
-            '/class="[^"]*availability[^"]*"[^>]*>(.*?)<\/span>/i',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $html, $matches)) {
-                $availability = trim(strip_tags($matches[1]));
-                if (!empty($availability)) {
-                    return $availability;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Get basic product data when scraping fails
-     */
-    private function getBasicProductData(string $url, ?string $asin): array
-    {
-        // Données mockées pour les tests
-        $mockData = [
-            'B0C735J188' => [
-                'title' => 'Echo Dot (5ème génération) - Haut-parleur intelligent avec Alexa - Anthracite',
-                'price' => 59.99,
-                'image_url' => 'https://m.media-amazon.com/images/I/714Rq4k05UL._AC_SL1000_.jpg',
-                'description' => 'Echo Dot - Notre haut-parleur intelligent le plus vendu avec Alexa. Le design compact s\'intègre parfaitement dans votre espace.',
-                'availability' => 'En stock',
-            ],
-            'B08N5WRWNW' => [
-                'title' => 'Echo Show 8 (2ème génération) - Écran intelligent avec Alexa - Charbon',
-                'price' => 129.99,
-                'image_url' => 'https://m.media-amazon.com/images/I/61jKIqJQyVL._AC_SL1000_.jpg',
-                'description' => 'Echo Show 8 - Écran intelligent avec Alexa. Regardez des vidéos, appelez vos proches et contrôlez votre maison intelligente.',
-                'availability' => 'En stock',
-            ],
-            'B0B7BF5L9K' => [
-                'title' => 'Fire TV Stick 4K Max - Lecteur multimédia streaming avec Alexa',
-                'price' => 79.99,
-                'image_url' => 'https://m.media-amazon.com/images/I/51TjJOTfslL._AC_SL1000_.jpg',
-                'description' => 'Fire TV Stick 4K Max - Notre lecteur multimédia le plus puissant. Streaming 4K Ultra HD, Wi-Fi 6, et contrôle vocal Alexa.',
-                'availability' => 'En stock',
-            ],
-        ];
-
-        if (isset($mockData[$asin])) {
-            return array_merge($mockData[$asin], ['asin' => $asin]);
-        }
-
-        return [
-            'asin' => $asin,
-            'title' => 'Product from Amazon',
-            'price' => null,
-            'image_url' => null,
-            'description' => null,
-            'availability' => 'Unknown',
-        ];
     }
 
     /**
@@ -758,32 +1163,18 @@ class AmazonScrapingService
      */
     public function validateAmazonUrl(string $url): bool
     {
-        // Supports all major Amazon marketplaces: US, DE, UK, FR, IT, ES, BR, IN, CA, EU
         $amazonDomains = [
-            'amazon.com',
-            'amazon.de',
-            'amazon.co.uk',
-            'amazon.fr',
-            'amazon.it',
-            'amazon.es',
-            'amazon.com.br',
-            'amazon.in',
-            'amazon.ca',
-            'amazon.eu',
-            'a.co', // Amazon short URLs
-            'amzn.to',
-            'amzn.com',
-            'amzn.eu', // Amazon EU short URLs
+            'amazon.com', 'amazon.de', 'amazon.co.uk', 'amazon.fr',
+            'amazon.it', 'amazon.es', 'amazon.com.br', 'amazon.in',
+            'amazon.ca', 'amazon.eu', 'a.co', 'amzn.to', 'amzn.eu',
+            'amzn.com', 'amzn.com.br', 'amzn.co.uk', 'amzn.de',
+            'amzn.fr', 'amzn.it', 'amzn.es', 'amzn.in', 'amzn.ca',
         ];
 
-        $parsedUrl = parse_url($url);
-        if (!$parsedUrl || !isset($parsedUrl['host'])) {
-            return false;
-        }
-
-        $host = strtolower($parsedUrl['host']);
+        $host = strtolower(parse_url($url, PHP_URL_HOST) ?? '');
+        
         foreach ($amazonDomains as $domain) {
-            if (strpos($host, $domain) !== false) {
+            if (str_contains($host, $domain)) {
                 return true;
             }
         }
@@ -792,26 +1183,47 @@ class AmazonScrapingService
     }
 
     /**
-     * Resolve short URL to full Amazon URL
+     * Scrape with retry
      */
-    private function resolveShortUrl(string $shortUrl): ?string
+    public function scrapeProductWithRetry(string $url, int $maxRetries = 3): array
     {
-        try {
-            $response = Http::withHeaders([
-                'User-Agent' => $this->userAgent,
-            ])->timeout(10)->get($shortUrl);
-
-            if ($response->successful()) {
-                // Récupérer l'URL finale après redirection
-                $finalUrl = $response->effectiveUri();
-                if ($finalUrl && $this->validateAmazonUrl($finalUrl)) {
-                    return $finalUrl;
-                }
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            $result = $this->scrapeProduct($url, $attempt === 1);
+            
+            if ($result['success']) {
+                return $result;
             }
-        } catch (Exception $e) {
-            Log::warning('Short URL resolution failed: ' . $e->getMessage());
+            
+            if ($attempt < $maxRetries) {
+                usleep(pow(2, $attempt) * 1000000);
+            }
         }
+        
+        return [
+            'success' => false,
+            'error' => 'Failed after ' . $maxRetries . ' attempts',
+        ];
+    }
 
-        return null;
+    /**
+     * Get fallback image URL from ASIN
+     * Format: https://images-na.ssl-images-amazon.com/images/I/{ASIN_HASH}.{EXT}
+     */
+    private function getFallbackImageUrl(string $asin, string $marketplace): ?string
+    {
+        $baseUrl = $this->getAmazonBaseUrl(null);
+        
+        // Construire l'URL d'image standard d'Amazon
+        // Format: https://m.media-amazon.com/images/I/{hash}.{ext}
+        // On peut essayer plusieurs formats courants
+        $imageFormats = [
+            "https://m.media-amazon.com/images/I/{$asin}._AC_SL1500_.jpg",
+            "https://images-na.ssl-images-amazon.com/images/I/{$asin}._AC_SL1500_.jpg",
+            "https://images-eu.ssl-images-amazon.com/images/I/{$asin}._AC_SL1500_.jpg",
+        ];
+
+        // Note: Cette méthode ne garantit pas que l'image existe
+        // Mais c'est mieux que de retourner null
+        return $imageFormats[0] ?? null;
     }
 }

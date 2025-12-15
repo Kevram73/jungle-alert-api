@@ -64,7 +64,7 @@ class AlertController extends Controller
         
         $alerts = Alert::forUser($user->id)
             ->with(['product' => function($query) {
-                $query->select('id', 'title', 'current_price', 'image_url', 'amazon_url');
+                $query->select('id', 'title', 'current_price', 'image_url', 'amazon_url', 'currency', 'marketplace');
             }])
             ->orderBy('created_at', 'desc')
             ->paginate(20);
@@ -155,7 +155,7 @@ class AlertController extends Controller
         }
 
         $alert->load(['product' => function($query) {
-            $query->select('id', 'title', 'current_price', 'image_url', 'amazon_url');
+            $query->select('id', 'title', 'current_price', 'image_url', 'amazon_url', 'currency', 'marketplace');
         }]);
 
         return response()->json([
@@ -199,20 +199,37 @@ class AlertController extends Controller
     /**
      * Remove the specified alert
      */
-    public function destroy(Request $request, Alert $alert): JsonResponse
+    public function destroy(Request $request, $id): JsonResponse
     {
         $user = $request->user();
 
-        // Vérifier que l'alerte appartient à l'utilisateur
-        if ($alert->user_id !== $user->id) {
-            return response()->json(['message' => 'Alert not found'], 404);
+        // Convertir l'ID en entier
+        $alertId = is_numeric($id) ? (int)$id : null;
+        if (!$alertId || $alertId <= 0) {
+            return response()->json([
+                'message' => 'Invalid alert ID',
+                'error' => 'Invalid alert ID'
+            ], 400);
+        }
+        
+        // Chercher l'alert avec vérification que l'alert appartient à l'utilisateur
+        $alert = Alert::where('id', $alertId)
+            ->where('user_id', $user->id)
+            ->first();
+        
+        if (!$alert) {
+            return response()->json([
+                'message' => 'Alert not found or does not belong to you',
+                'error' => 'Alert not found'
+            ], 404);
         }
 
         $alert->delete();
 
         return response()->json([
             'message' => 'Alert deleted successfully',
-        ]);
+            'success' => true
+        ], 200);
     }
 
     /**
@@ -268,7 +285,7 @@ class AlertController extends Controller
         $alerts = Alert::forUser($user->id)
             ->active()
             ->with(['product' => function($query) {
-                $query->select('id', 'title', 'current_price', 'image_url', 'amazon_url');
+                $query->select('id', 'title', 'current_price', 'image_url', 'amazon_url', 'currency', 'marketplace');
             }])
             ->orderBy('created_at', 'desc')
             ->get();
@@ -289,7 +306,7 @@ class AlertController extends Controller
         $alerts = Alert::forUser($user->id)
             ->triggered()
             ->with(['product' => function($query) {
-                $query->select('id', 'title', 'current_price', 'image_url', 'amazon_url');
+                $query->select('id', 'title', 'current_price', 'image_url', 'amazon_url', 'currency', 'marketplace');
             }])
             ->orderBy('triggered_at', 'desc')
             ->paginate(20);

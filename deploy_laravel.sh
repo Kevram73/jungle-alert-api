@@ -52,15 +52,20 @@ sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERV
     chmod -R 775 /opt/jungle-alert-laravel/storage
     chmod -R 775 /opt/jungle-alert-laravel/bootstrap/cache
     
-    # Configurer l'environnement
-    cp .env.example .env
-    php artisan key:generate
-    
-    # Configurer la base de données
-    sed -i 's/DB_HOST=127.0.0.1/DB_HOST=127.0.0.1/' .env
-    sed -i 's/DB_DATABASE=laravel/DB_DATABASE=junglealert/' .env
-    sed -i 's/DB_USERNAME=root/DB_USERNAME=work4connect/' .env
-    sed -i 's/DB_PASSWORD=/DB_PASSWORD=Work4Connect2024!/' .env
+    # Configurer l'environnement (préserver le .env existant)
+    if [ ! -f .env ]; then
+        echo "📝 Création du fichier .env..."
+        cp .env.example .env
+        php artisan key:generate
+        
+        # Configurer la base de données uniquement si le fichier n'existait pas
+        sed -i 's/DB_HOST=127.0.0.1/DB_HOST=127.0.0.1/' .env
+        sed -i 's/DB_DATABASE=laravel/DB_DATABASE=junglealert/' .env
+        sed -i 's/DB_USERNAME=root/DB_USERNAME=work4connect/' .env
+        sed -i 's/DB_PASSWORD=/DB_PASSWORD=Work4Connect2024!/' .env
+    else
+        echo "✅ Fichier .env existant préservé"
+    fi
     
     # Exécuter les migrations
     php artisan migrate --force
