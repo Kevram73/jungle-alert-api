@@ -165,7 +165,7 @@ jobs:
           echo "✅ Configuration terminée"
           EOF
 
-      - name: 🗄️ Configuration de la base de données
+      - name: 🗄️ Configuration de la base de données (version simplifiée)
         env:
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
@@ -174,8 +174,10 @@ jobs:
           sshpass -p "$SSH_PASSWORD" \
             ssh -o StrictHostKeyChecking=no \
                 -o ConnectTimeout=30 \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'MYSQL_SCRIPT'
           set -e
+          
+          echo "🔍 Vérification de MySQL..."
           
           # Vérifier si MySQL/MariaDB est installé
           if command -v mysql &> /dev/null; then
@@ -184,56 +186,66 @@ jobs:
             # Démarrer le service
             sudo systemctl start mysql 2>/dev/null || sudo systemctl start mariadb 2>/dev/null || true
             
-            # Créer la base de données et l'utilisateur
-            sudo mysql << 'MYSQL_EOF'
-            CREATE DATABASE IF NOT EXISTS junglealert 
-              CHARACTER SET utf8mb4 
-              COLLATE utf8mb4_unicode_ci;
-            
-            CREATE USER IF NOT EXISTS 'work4connect'@'localhost' 
-              IDENTIFIED BY 'Work4Connect2024!';
-            
-            GRANT ALL PRIVILEGES ON junglealert.* 
-              TO 'work4connect'@'localhost';
-            
-            FLUSH PRIVILEGES;
-            MYSQL_EOF
-            
-            echo "✅ Base de données configurée"
+            # Vérifier si la base de données existe déjà
+            if mysql -u root -e "SHOW DATABASES LIKE 'junglealert';" | grep -q junglealert; then
+              echo "📊 Base de données 'junglealert' existe déjà"
+            else
+              echo "🗄️ Création de la base de données..."
+              sudo mysql -e "CREATE DATABASE IF NOT EXISTS junglealert CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+              
+              echo "👤 Création de l'utilisateur..."
+              sudo mysql -e "CREATE USER IF NOT EXISTS 'work4connect'@'localhost' IDENTIFIED BY 'Work4Connect2024!';"
+              
+              echo "🔑 Attribution des droits..."
+              sudo mysql -e "GRANT ALL PRIVILEGES ON junglealert.* TO 'work4connect'@'localhost';"
+              sudo mysql -e "FLUSH PRIVILEGES;"
+              
+              echo "✅ Base de données et utilisateur créés"
+            fi
           else
             echo "⚠️ MySQL/MariaDB n'est pas installé"
             echo "Installation de MySQL..."
             sudo apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y mariadb-server mariadb-client
             
-            # Configuration sécurisée automatique
-            sudo mysql << 'SECURE_EOF'
-            DELETE FROM mysql.user WHERE User='';
-            DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
-            DROP DATABASE IF EXISTS test;
-            DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
-            FLUSH PRIVILEGES;
-            SECURE_EOF
+            echo "🔧 Configuration sécurisée..."
+            # Configuration sécurisée simplifiée
+            sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'Work4Connect2024!';"
+            sudo mysql -e "DELETE FROM mysql.user WHERE User='';"
+            sudo mysql -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
+            sudo mysql -e "DROP DATABASE IF EXISTS test;"
+            sudo mysql -e "FLUSH PRIVILEGES;"
             
-            echo "✅ MySQL installé et sécurisé"
+            # Créer la base de données et l'utilisateur pour l'application
+            sudo mysql -e "CREATE DATABASE junglealert CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+            sudo mysql -e "CREATE USER 'work4connect'@'localhost' IDENTIFIED BY 'Work4Connect2024!';"
+            sudo mysql -e "GRANT ALL PRIVILEGES ON junglealert.* TO 'work4connect'@'localhost';"
+            sudo mysql -e "FLUSH PRIVILEGES;"
+            
+            echo "✅ MySQL installé et configuré"
           fi
-          EOF
+          
+          echo "✅ Configuration MySQL terminée"
+          MYSQL_SCRIPT
 
-      - name: 🌐 Configuration d'Apache
+      - name: 🌐 Configuration d'Apache (version corrigée)
         env:
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
           echo "🌐 Configuration d'Apache..."
           
+          # Créer une commande SSH simple pour éviter les problèmes de syntaxe
           sshpass -p "$SSH_PASSWORD" \
             ssh -o StrictHostKeyChecking=no \
                 -o ConnectTimeout=30 \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} '
           set -e
+          
+          echo "🔍 Vérification d Apache..."
           
           # Installer Apache si nécessaire
           if ! command -v apache2 &> /dev/null; then
-            echo "📦 Installation d'Apache..."
+            echo "📦 Installation d Apache..."
             sudo apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y apache2 libapache2-mod-php
           fi
@@ -243,14 +255,14 @@ jobs:
           sudo a2enmod headers
           
           # Créer la configuration du site
-          sudo tee /etc/apache2/sites-available/jungle-alert.conf > /dev/null << 'APACHE_EOF'
+          echo "⚙️ Création de la configuration Apache..."
+          sudo tee /etc/apache2/sites-available/jungle-alert.conf > /dev/null << APACHE_EOF
           <VirtualHost *:80>
-              ServerName ${{ secrets.SSH_HOST }}
+              ServerName '"${{ secrets.SSH_HOST }}"'
               ServerAdmin admin@jungle-alert.com
-              DocumentRoot ${{ env.DEPLOY_PATH }}/public
+              DocumentRoot '"${{ env.DEPLOY_PATH }}"'/public
               
-              
-              <Directory ${{ env.DEPLOY_PATH }}/public>
+              <Directory '"${{ env.DEPLOY_PATH }}"'/public>
                   Options -Indexes +FollowSymLinks
                   AllowOverride All
                   Require all granted
@@ -268,8 +280,8 @@ jobs:
               Header always set X-Frame-Options "SAMEORIGIN"
               Header always set X-XSS-Protection "1; mode=block"
               
-              ErrorLog ${APACHE_LOG_DIR}/jungle-alert-error.log
-              CustomLog ${APACHE_LOG_DIR}/jungle-alert-access.log combined
+              ErrorLog \${APACHE_LOG_DIR}/jungle-alert-error.log
+              CustomLog \${APACHE_LOG_DIR}/jungle-alert-access.log combined
           </VirtualHost>
           APACHE_EOF
           
@@ -278,12 +290,14 @@ jobs:
           sudo a2dissite 000-default.conf
           
           # Tester la configuration
+          echo "🔧 Test de la configuration Apache..."
           sudo apache2ctl configtest
           
           # Redémarrer Apache
+          echo "🔄 Redémarrage d Apache..."
           sudo systemctl restart apache2
           
-          # Vérifier qu'Apache fonctionne
+          # Vérifier qu Apache fonctionne
           sleep 2
           if systemctl is-active --quiet apache2; then
             echo "✅ Apache configuré et démarré"
@@ -292,68 +306,79 @@ jobs:
             sudo systemctl status apache2
             exit 1
           fi
-          EOF
+          '
 
       - name: 🧪 Tests de déploiement
         env:
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
           echo "🧪 Tests de déploiement..."
-          sleep 10  # Donner plus de temps pour le démarrage
+          sleep 10
           
           sshpass -p "$SSH_PASSWORD" \
             ssh -o StrictHostKeyChecking=no \
                 -o ConnectTimeout=30 \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} '
           echo "🔍 Tests sur le serveur..."
           
-          # Tester l'API
-          echo "1️⃣ Test de l'API..."
-          curl -f --max-time 10 http://localhost/api/health \
-            || curl -f --max-time 10 http://localhost/health \
-            || curl -f --max-time 10 http://localhost/ \
-            || echo "⚠️ Test API échoué"
+          # Tester l API
+          echo "1️⃣ Test de l API..."
+          curl -f --max-time 10 http://localhost/api/health 2>/dev/null || \
+          curl -f --max-time 10 http://localhost/health 2>/dev/null || \
+          curl -f --max-time 10 http://localhost/ 2>/dev/null || \
+          echo "⚠️ Test API échoué"
           
           # Vérifier les logs Apache
-          echo -e "\n2️⃣ Vérification des logs Apache..."
-          if sudo tail -5 /var/log/apache2/jungle-alert-error.log 2>/dev/null | grep -q -v "^$"; then
-            echo "⚠️ Des erreurs dans les logs Apache:"
-            sudo tail -10 /var/log/apache2/jungle-alert-error.log
+          echo ""
+          echo "2️⃣ Vérification des logs Apache..."
+          if [ -f /var/log/apache2/jungle-alert-error.log ]; then
+            if sudo tail -5 /var/log/apache2/jungle-alert-error.log | grep -q -v "^$"; then
+              echo "⚠️ Des erreurs dans les logs Apache:"
+              sudo tail -10 /var/log/apache2/jungle-alert-error.log
+            else
+              echo "✅ Aucune erreur dans les logs"
+            fi
           else
-            echo "✅ Aucune erreur dans les logs"
+            echo "📁 Fichier de log non trouvé"
           fi
           
           # Vérifier le statut des services
-          echo -e "\n3️⃣ Statut des services..."
+          echo ""
+          echo "3️⃣ Statut des services..."
           echo "Apache: $(systemctl is-active apache2)"
-          echo "MySQL: $(systemctl is-active mysql 2>/dev/null || systemctl is-active mariadb 2>/dev/null || echo 'non actif')"
+          mysql_status=$(systemctl is-active mysql 2>/dev/null || systemctl is-active mariadb 2>/dev/null || echo "non actif")
+          echo "MySQL: $mysql_status"
           
           # Vérifier les permissions
-          echo -e "\n4️⃣ Vérification des permissions..."
-          ls -la ${{ env.DEPLOY_PATH }}/storage/
-          ls -la ${{ env.DEPLOY_PATH }}/bootstrap/cache/
+          echo ""
+          echo "4️⃣ Vérification des permissions..."
+          if [ -d '"${{ env.DEPLOY_PATH }}"'/storage ]; then
+            echo "📁 Contenu du répertoire storage:"
+            ls -la '"${{ env.DEPLOY_PATH }}"'/storage/ | head -5
+          fi
           
-          echo -e "\n✅ Tests terminés"
-          EOF
+          echo ""
+          echo "✅ Tests terminés"
+          '
 
-      - name: 🌐 Test externe de l'API
+      - name: 🌐 Test externe de l API
         run: |
-          echo "🌐 Test externe de l'API..."
+          echo "🌐 Test externe de l API..."
           sleep 5
           
           # Essayer plusieurs ports
           for port in 80 8000 8080; do
             echo "🔍 Test sur le port $port..."
-            if curl -f --max-time 10 http://${{ secrets.SSH_HOST }}:$port/ > /dev/null 2>&1; then
+            if curl -f --max-time 10 http://'"${{ secrets.SSH_HOST }}"':$port/ > /dev/null 2>&1; then
               echo "✅ Serveur accessible sur le port $port"
               break
             fi
           done
           
-          # Test spécifique à l'API
-          echo "🔍 Test de l'endpoint API..."
-          curl -f --max-time 10 http://${{ secrets.SSH_HOST }}/api/health \
-            || echo "⚠️ L'endpoint API n'est pas accessible"
+          # Test spécifique à l API
+          echo "🔍 Test de l endpoint API..."
+          curl -f --max-time 10 http://'"${{ secrets.SSH_HOST }}"'/api/health 2>/dev/null || \
+          echo "⚠️ L endpoint API n est pas accessible"
 
       - name: 📊 Rapport de déploiement
         if: always()
@@ -378,7 +403,7 @@ jobs:
             echo "- ✅ Apache configuré" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Tests API passés" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🔗 URLs d'accès" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔗 URLs d accès" >> $GITHUB_STEP_SUMMARY
             echo "- http://${{ secrets.SSH_HOST }}/" >> $GITHUB_STEP_SUMMARY
             echo "- http://${{ secrets.SSH_HOST }}/api/health" >> $GITHUB_STEP_SUMMARY
           else
