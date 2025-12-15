@@ -108,9 +108,47 @@ jobs:
           
           echo "1️⃣ Vérification de l'environnement..."
           php -v
+          composer --version
+          
+          echo "2️⃣ Configuration de l'environnement Laravel..."
+          if [ ! -f .env ]; then
+            echo "📄 Création du fichier .env..."
+            if [ -f .env.example ]; then
+              cp .env.example .env
+              echo "✅ .env créé depuis .env.example"
+            else
+              echo "❌ .env.example non trouvé"
+              exit 1
+            fi
+          else
+            echo "📄 .env existe déjà"
+          fi
+          
+          # Mettre à jour les variables d'environnement
+          echo "3️⃣ Mise à jour des variables d'environnement..."
+          
+          # Fonction pour mettre à jour ou ajouter une variable
+          update_env() {
+            local key="$1"
+            local value="$2"
+            if grep -q "^$key=" .env; then
+              sed -i "s/^$key=.*/$key=$value/" .env
+            else
+              echo "$key=$value" >> .env
+            fi
+          }
           
           update_env "APP_ENV" "production"
           update_env "APP_DEBUG" "false"
+          update_env "APP_URL" "http://${{ secrets.SSH_HOST }}"
+          
+          # Configuration de la base de données
+          update_env "DB_CONNECTION" "mysql"
+          update_env "DB_HOST" "127.0.0.1"
+          update_env "DB_PORT" "3306"
+          update_env "DB_DATABASE" "junglealert"
+          update_env "DB_USERNAME" "work4connect"
+          update_env "DB_PASSWORD" "Work4Connect2024!"
           
           echo "4️⃣ Installation des dépendances Composer..."
           composer install --no-dev --optimize-autoloader --no-interaction
