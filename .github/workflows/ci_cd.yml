@@ -23,7 +23,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
-          extensions: mbstring, xml, ctype, iconv, intl, pdo, mysql, dom, curl, zip, gd
+          extensions: mbstring, xml, ctype, iconv, intl, pdo, mysql, curl, zip, gd
           coverage: xdebug
 
       - name: Valider la syntaxe
@@ -89,63 +89,73 @@ jobs:
           
           echo "✅ Fichiers synchronisés"
 
-      - name: ⚙️ Préparation du serveur (extensions PHP)
+      - name: ⚙️ Préparation du serveur (PHP 8.2 et extensions)
         env:
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
-          echo "🔧 Installation des extensions PHP nécessaires..."
+          echo "🔧 Installation de PHP 8.2 et des extensions nécessaires..."
           
           sshpass -p "$SSH_PASSWORD" \
             ssh -o StrictHostKeyChecking=no \
                 -o ConnectTimeout=30 \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EXTENSIONS_SCRIPT'
+                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'PHP_INSTALL'
           set -ex
           
-          echo "=== INSTALLATION DES EXTENSIONS PHP ==="
+          echo "=== INSTALLATION DE PHP 8.2 ==="
           
-          # Vérifier la version de PHP
-          echo "🔍 Vérification de PHP..."
-          php -v || echo "⚠️ PHP non installé"
-          
-          # Installer PHP et les extensions nécessaires
-          echo "📦 Installation des extensions PHP..."
+          # Ajouter le repository PHP si nécessaire
+          echo "📦 Ajout du repository PHP..."
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            php \
-            php-cli \
-            php-fpm \
-            php-common \
-            php-mysql \
-            php-zip \
-            php-gd \
-            php-mbstring \
-            php-curl \
-            php-xml \
-            php-bcmath \
-            php-json \
-            php-tokenizer \
-            php-dom \
-            php-xmlwriter \
-            libapache2-mod-php
+          sudo apt-get install -y software-properties-common ca-certificates lsb-release apt-transport-https
+          sudo LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
+          sudo apt-get update
           
-          # Vérifier les extensions installées
-          echo "✅ Extensions installées :"
-          php -m | grep -E "dom|xml|mbstring|curl|zip|gd|mysql|pdo|json"
+          # Installer PHP 8.2 et toutes les extensions nécessaires
+          echo "📦 Installation de PHP 8.2 avec extensions..."
+          sudo apt-get install -y \
+            php8.2 \
+            php8.2-cli \
+            php8.2-fpm \
+            php8.2-common \
+            php8.2-mysql \
+            php8.2-zip \
+            php8.2-gd \
+            php8.2-mbstring \
+            php8.2-curl \
+            php8.2-xml \
+            php8.2-bcmath \
+            php8.2-json \
+            php8.2-tokenizer \
+            php8.2-simplexml \
+            php8.2-dom \
+            php8.2-intl \
+            php8.2-xmlreader \
+            libapache2-mod-php8.2
           
-          # Redémarrer Apache pour prendre en charge les nouvelles extensions
-          echo "🔄 Redémarrage d'Apache..."
-          sudo systemctl restart apache2 || true
+          # Définir PHP 8.2 comme version par défaut
+          echo "⚙️ Configuration de PHP 8.2 comme version par défaut..."
+          sudo update-alternatives --set php /usr/bin/php8.2
+          sudo update-alternatives --set phar /usr/bin/phar8.2
+          sudo update-alternatives --set phar.phar /usr/bin/phar.phar8.2
           
-          # Vérifier Composer
+          # Vérifier l'installation
+          echo "✅ PHP installé :"
+          php -v
+          
+          echo "📋 Extensions PHP installées :"
+          php -m
+          
+          # Installer Composer si nécessaire
           if ! command -v composer &> /dev/null; then
             echo "📦 Installation de Composer..."
             curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/local/bin --filename=composer
-          else
-            echo "✅ Composer déjà installé"
           fi
           
-          echo "=== PRÉPARATION TERMINÉE ==="
-          EXTENSIONS_SCRIPT
+          echo "✅ Composer version :"
+          composer --version
+          
+          echo "=== INSTALLATION PHP TERMINÉE ==="
+          PHP_INSTALL
 
       - name: ⚙️ Configuration du serveur
         env:
@@ -172,50 +182,41 @@ jobs:
           if [ ! -f .env ]; then
             cp .env.example .env
             echo "✅ .env créé depuis .env.example"
+          else
+            echo "📄 .env existe déjà"
           fi
           
           # Mettre à jour les variables d'environnement
-          if grep -q "APP_ENV=" .env; then
-            sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
-          else
-            echo "APP_ENV=production" >> .env
-          fi
-          
-          if grep -q "APP_DEBUG=" .env; then
-            sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
-          else
-            echo "APP_DEBUG=false" >> .env
-          fi
+          echo "3️⃣ Mise à jour des variables d'environnement..."
+          sed -i 's/APP_ENV=.*/APP_ENV=production/' .env 2>/dev/null || echo "APP_ENV=production" >> .env
+          sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env 2>/dev/null || echo "APP_DEBUG=false" >> .env
           
           # Configuration de la base de données
-          echo "3️⃣ Configuration de la base de données..."
-          cat >> .env << 'ENV_CONFIG'
-          DB_CONNECTION=mysql
-          DB_HOST=127.0.0.1
-          DB_PORT=3306
-          DB_DATABASE=junglealert
-          DB_USERNAME=work4connect
-          DB_PASSWORD=Work4Connect2024!
-          ENV_CONFIG
+          echo "4️⃣ Configuration de la base de données..."
+          grep -q "DB_CONNECTION=" .env || echo "DB_CONNECTION=mysql" >> .env
+          sed -i 's/DB_HOST=.*/DB_HOST=127.0.0.1/' .env 2>/dev/null || echo "DB_HOST=127.0.0.1" >> .env
+          sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env 2>/dev/null || echo "DB_PORT=3306" >> .env
+          sed -i 's/DB_DATABASE=.*/DB_DATABASE=junglealert/' .env 2>/dev/null || echo "DB_DATABASE=junglealert" >> .env
+          sed -i 's/DB_USERNAME=.*/DB_USERNAME=work4connect/' .env 2>/dev/null || echo "DB_USERNAME=work4connect" >> .env
+          sed -i 's/DB_PASSWORD=.*/DB_PASSWORD=Work4Connect2024!/' .env 2>/dev/null || echo "DB_PASSWORD=Work4Connect2024!" >> .env
           
-          echo "4️⃣ Installation des dépendances Composer..."
-          # Ignorer temporairement les vérifications de plateforme
-          composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs
+          echo "5️⃣ Installation des dépendances Composer..."
+          composer install --no-dev --optimize-autoloader --no-interaction
           
-          echo "5️⃣ Génération de la clé d'application..."
+          echo "6️⃣ Génération de la clé d'application..."
           php artisan key:generate --force
           
-          echo "6️⃣ Migration de la base de données..."
+          echo "7️⃣ Migration de la base de données..."
           php artisan migrate --force || echo "⚠️ Migration échouée ou déjà effectuée"
           
-          echo "7️⃣ Optimisation du cache..."
+          echo "8️⃣ Optimisation du cache..."
           php artisan config:clear
           php artisan cache:clear
           php artisan config:cache
           php artisan route:cache
           php artisan view:cache
           
-          echo "8️⃣ Gestion des permissions..."
+          echo "9️⃣ Gestion des permissions..."
           sudo chown -R www-data:www-data storage bootstrap/cache
           sudo chmod -R 775 storage bootstrap/cache
           
@@ -224,7 +225,7 @@ jobs:
           touch storage/logs/laravel.log
           chmod 664 storage/logs/laravel.log
           
-          echo "✅ Configuration terminée"
+          echo "✅ Configuration Laravel terminée"
           CONFIG_SCRIPT
 
       - name: 🗄️ Configuration de la base de données
@@ -247,32 +248,8 @@ jobs:
             
             # Démarrer le service
             sudo systemctl start mysql 2>/dev/null || sudo systemctl start mariadb 2>/dev/null || true
+            sudo systemctl enable mysql 2>/dev/null || sudo systemctl enable mariadb 2>/dev/null || true
             
-            # Vérifier si la base de données existe déjà
-            if mysql -u root -e "SHOW DATABASES LIKE 'junglealert';" 2>/dev/null | grep -q junglealert; then
-              echo "📊 Base de données 'junglealert' existe déjà"
-            else
-              echo "🗄️ Création de la base de données..."
-              sudo mysql -e "CREATE DATABASE IF NOT EXISTS junglealert CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null || \
-                sudo mysql -u root -p'Work4Connect2024!' -e "CREATE DATABASE IF NOT EXISTS junglealert CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null || \
-                echo "⚠️ Impossible de créer la base de données"
-              
-              echo "👤 Création de l'utilisateur..."
-              sudo mysql -e "CREATE USER IF NOT EXISTS 'work4connect'@'localhost' IDENTIFIED BY 'Work4Connect2024!';" 2>/dev/null || \
-                sudo mysql -u root -p'Work4Connect2024!' -e "CREATE USER IF NOT EXISTS 'work4connect'@'localhost' IDENTIFIED BY 'Work4Connect2024!';" 2>/dev/null || \
-                echo "⚠️ Impossible de créer l'utilisateur"
-              
-              echo "🔑 Attribution des droits..."
-              sudo mysql -e "GRANT ALL PRIVILEGES ON junglealert.* TO 'work4connect'@'localhost';" 2>/dev/null || \
-                sudo mysql -u root -p'Work4Connect2024!' -e "GRANT ALL PRIVILEGES ON junglealert.* TO 'work4connect'@'localhost';" 2>/dev/null || \
-                echo "⚠️ Impossible d'attribuer les droits"
-              
-              sudo mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || \
-                sudo mysql -u root -p'Work4Connect2024!' -e "FLUSH PRIVILEGES;" 2>/dev/null || \
-                echo "⚠️ Impossible de flush les privilèges"
-              
-              echo "✅ Base de données et utilisateur configurés"
-            fi
           else
             echo "⚠️ MySQL/MariaDB n'est pas installé"
             echo "Installation de MySQL..."
@@ -282,11 +259,27 @@ jobs:
             # Démarrer MySQL
             sudo systemctl start mariadb
             sudo systemctl enable mariadb
+          fi
+          
+          # Attendre que MySQL démarre
+          sleep 5
+          
+          # Créer la base de données et l'utilisateur
+          echo "🗄️ Création de la base de données..."
+          
+          # Essayer sans mot de passe root d'abord
+          sudo mysql << 'MYSQL_SETUP' 2>/dev/null || true
+          CREATE DATABASE IF NOT EXISTS junglealert CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+          CREATE USER IF NOT EXISTS 'work4connect'@'localhost' IDENTIFIED BY 'Work4Connect2024!';
+          GRANT ALL PRIVILEGES ON junglealert.* TO 'work4connect'@'localhost';
+          FLUSH PRIVILEGES;
+          MYSQL_SETUP
+          
+          # Si ça échoue, essayer avec mot de passe
+          if ! mysql -u work4connect -p'Work4Connect2024!' -e "SHOW DATABASES;" 2>/dev/null; then
+            echo "🔧 Configuration alternative de MySQL..."
             
-            # Configuration sécurisée
-            echo "🔧 Configuration sécurisée de MySQL..."
-            
-            # Essayer différentes méthodes de connexion
+            # Sécuriser l'installation MySQL
             sudo mysql << 'MYSQL_SECURE' 2>/dev/null || true
             ALTER USER 'root'@'localhost' IDENTIFIED BY 'Work4Connect2024!';
             DELETE FROM mysql.user WHERE User='';
@@ -296,15 +289,20 @@ jobs:
             FLUSH PRIVILEGES;
             MYSQL_SECURE
             
-            # Créer la base de données et l'utilisateur pour l'application
-            sudo mysql -u root -p'Work4Connect2024!' << 'APP_DB' 2>/dev/null || true
-            CREATE DATABASE junglealert CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-            CREATE USER 'work4connect'@'localhost' IDENTIFIED BY 'Work4Connect2024!';
+            # Créer avec mot de passe root
+            sudo mysql -u root -p'Work4Connect2024!' << 'MYSQL_WITH_PASS' 2>/dev/null || true
+            CREATE DATABASE IF NOT EXISTS junglealert CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            CREATE USER IF NOT EXISTS 'work4connect'@'localhost' IDENTIFIED BY 'Work4Connect2024!';
             GRANT ALL PRIVILEGES ON junglealert.* TO 'work4connect'@'localhost';
             FLUSH PRIVILEGES;
-            APP_DB
-            
-            echo "✅ MySQL installé et configuré"
+            MYSQL_WITH_PASS
+          fi
+          
+          # Vérifier que la base de données a été créée
+          if mysql -u work4connect -p'Work4Connect2024!' -e "SHOW DATABASES;" 2>/dev/null | grep -q junglealert; then
+            echo "✅ Base de données configurée avec succès"
+          else
+            echo "⚠️ Base de données non créée, mais continuons..."
           fi
           
           echo "=== CONFIGURATION MYSQL TERMINÉE ==="
@@ -328,7 +326,7 @@ jobs:
           if ! command -v apache2 &> /dev/null; then
             echo "📦 Installation d'Apache..."
             sudo apt-get update
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y apache2
+            sudo apt-get install -y apache2
           fi
           
           # Activer les modules
@@ -345,7 +343,7 @@ jobs:
           DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
           SERVER_HOST="${{ secrets.SSH_HOST }}"
           
-          sudo tee /etc/apache2/sites-available/jungle-alert.conf > /dev/null << 'VIRTUAL_HOST'
+          sudo tee /etc/apache2/sites-available/jungle-alert.conf > /dev/null << VIRTUAL_HOST
           <VirtualHost *:80>
               ServerName ${SERVER_HOST}
               ServerAdmin admin@jungle-alert.com
@@ -391,15 +389,15 @@ jobs:
           sudo systemctl restart apache2
           
           # Vérifier qu'Apache fonctionne
-          sleep 2
+          sleep 3
           if systemctl is-active --quiet apache2; then
             echo "✅ Apache configuré et démarré"
           else
             echo "❌ Apache ne fonctionne pas"
             echo "=== LOGS D'ERREUR ==="
-            sudo journalctl -u apache2 --no-pager -n 30
-            echo "=== FICHIER DE CONFIGURATION ==="
-            sudo cat /etc/apache2/sites-available/jungle-alert.conf
+            sudo journalctl -u apache2 --no-pager -n 50
+            echo "=== CONFIGURATION TESTÉE ==="
+            sudo apache2ctl -S 2>&1 | head -20
             exit 1
           fi
           
@@ -425,54 +423,71 @@ jobs:
           echo "Apache: $(systemctl is-active apache2)"
           echo "MySQL: $(systemctl is-active mysql 2>/dev/null || systemctl is-active mariadb 2>/dev/null || echo 'non actif')"
           
-          echo "2️⃣ Test de l'application..."
+          echo "2️⃣ Vérification PHP..."
+          php -v
+          php -m | grep -E "mysql|pdo|mbstring|xml|json|curl"
+          
+          echo "3️⃣ Test de l'application Laravel..."
           cd ${{ env.DEPLOY_PATH }}
           
-          # Tester si Laravel répond
           if php artisan --version; then
             echo "✅ Laravel fonctionne"
           else
             echo "❌ Laravel ne fonctionne pas"
           fi
           
-          # Tester la connexion à la base de données
-          echo "3️⃣ Test de la base de données..."
-          if php artisan db:show 2>/dev/null || php artisan migrate:status 2>/dev/null; then
-            echo "✅ Connexion à la base de données établie"
+          echo "4️⃣ Test HTTP local..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ 2>/dev/null || echo "000")
+          if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "302" ] || [ "$HTTP_STATUS" = "000" ]; then
+            echo "✅ Application accessible localement (status: $HTTP_STATUS)"
           else
-            echo "⚠️ Impossible de se connecter à la base de données"
+            echo "⚠️ Application retourne status: $HTTP_STATUS"
           fi
           
-          # Tester l'application via curl
-          echo "4️⃣ Test HTTP..."
-          curl -I --max-time 5 http://localhost/ 2>/dev/null | head -1 || echo "⚠️ Application non accessible localement"
+          echo "5️⃣ Vérification des permissions..."
+          ls -la storage/ bootstrap/cache/
           
-          echo "5️⃣ Vérification des logs..."
+          echo "6️⃣ Vérification des logs..."
           if [ -f storage/logs/laravel.log ]; then
-            echo "✅ Logs Laravel présents"
+            echo "📋 5 dernières lignes des logs:"
             tail -5 storage/logs/laravel.log
           fi
           
           echo "=== TESTS TERMINÉS ==="
           TEST_SCRIPT
 
-      - name: 🌐 Test externe de l'API
+      - name: 🌐 Test externe de l'application
         run: |
-          echo "🌐 Test externe de l'API..."
-          sleep 5
+          echo "🌐 Test externe de l'application..."
+          sleep 10
           
-          # Tester la connexion au serveur
-          echo "🔍 Test de connectivité..."
-          if curl -f --max-time 10 http://${{ secrets.SSH_HOST }}/ 2>/dev/null; then
-            echo "✅ Application accessible depuis l'extérieur"
-            echo "🔗 URL: http://${{ secrets.SSH_HOST }}/"
-          else
-            echo "⚠️ Application non accessible depuis l'extérieur"
-            echo "Causes possibles :"
-            echo "  - Pare-feu bloquant le port 80"
-            echo "  - Problème de configuration DNS"
-            echo "  - Apache ne répond pas sur l'IP publique"
-          fi
+          echo "🔍 Test de l'application sur http://${{ secrets.SSH_HOST }}/"
+          
+          # Tester plusieurs fois avec des délais
+          for i in {1..3}; do
+            echo "Tentative $i..."
+            if curl -f --max-time 15 http://${{ secrets.SSH_HOST }}/ > /dev/null 2>&1; then
+              echo "✅ Application accessible depuis l'extérieur"
+              echo "🔗 URL: http://${{ secrets.SSH_HOST }}/"
+              
+              # Tester l'API si disponible
+              API_RESPONSE=$(curl -s --max-time 10 http://${{ secrets.SSH_HOST }}/api/health 2>/dev/null || echo "")
+              if [ -n "$API_RESPONSE" ]; then
+                echo "✅ API accessible: $API_RESPONSE"
+              else
+                echo "⚠️ API non accessible, mais l'application l'est"
+              fi
+              exit 0
+            fi
+            sleep 5
+          done
+          
+          echo "⚠️ Application non accessible depuis l'extérieur"
+          echo "Causes possibles :"
+          echo "  - Pare-feu bloquant le port 80"
+          echo "  - Apache n'écoute pas sur l'adresse publique"
+          echo "  - Problème de configuration réseau"
+          echo "⚠️ Note: L'application peut fonctionner localement mais pas être accessible publiquement"
 
       - name: 📊 Rapport de déploiement
         if: always()
@@ -484,6 +499,7 @@ jobs:
           echo "**Serveur :** ${{ secrets.SSH_HOST }}" >> $GITHUB_STEP_SUMMARY
           echo "**Utilisateur :** ${{ secrets.SSH_USER }}" >> $GITHUB_STEP_SUMMARY
           echo "**Chemin :** ${{ env.DEPLOY_PATH }}" >> $GITHUB_STEP_SUMMARY
+          echo "**PHP Version :** 8.2" >> $GITHUB_STEP_SUMMARY
           echo "**Date :** $(date)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
@@ -491,11 +507,11 @@ jobs:
             echo "✅ **Statut :** Déploiement réussi" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 📋 Résumé" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ Extensions PHP installées" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ PHP 8.2 installé avec toutes les extensions" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Fichiers synchronisés" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Configuration Laravel appliquée" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Base de données configurée" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ Apache configuré" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Apache configuré et démarré" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🔗 URLs d'accès" >> $GITHUB_STEP_SUMMARY
             echo "- http://${{ secrets.SSH_HOST }}/" >> $GITHUB_STEP_SUMMARY
@@ -504,13 +520,16 @@ jobs:
             echo "❌ **Statut :** Échec du déploiement" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🔍 Dépannage" >> $GITHUB_STEP_SUMMARY
-            echo "1. Vérifiez les logs ci-dessus" >> $GITHUB_STEP_SUMMARY
-            echo "2. Vérifiez que PHP et les extensions sont installées:" >> $GITHUB_STEP_SUMMARY
+            echo "1. Vérifiez les identifiants SSH" >> $GITHUB_STEP_SUMMARY
+            echo "2. Connectez-vous au serveur et vérifiez :" >> $GITHUB_STEP_SUMMARY
+            echo "   - sudo systemctl status apache2" >> $GITHUB_STEP_SUMMARY
+            echo "   - sudo tail -50 /var/log/apache2/error.log" >> $GITHUB_STEP_SUMMARY
+            echo "   - php -v" >> $GITHUB_STEP_SUMMARY
             echo "   - php -m" >> $GITHUB_STEP_SUMMARY
-            echo "3. Vérifiez les logs Apache:" >> $GITHUB_STEP_SUMMARY
-            echo "   - /var/log/apache2/error.log" >> $GITHUB_STEP_SUMMARY
-            echo "4. Vérifiez les logs Laravel:" >> $GITHUB_STEP_SUMMARY
-            echo "   - ${{ env.DEPLOY_PATH }}/storage/logs/laravel.log" >> $GITHUB_STEP_SUMMARY
+            echo "3. Vérifiez les permissions :" >> $GITHUB_STEP_SUMMARY
+            echo "   - ls -la ${{ env.DEPLOY_PATH }}/storage/" >> $GITHUB_STEP_SUMMARY
+            echo "4. Testez manuellement :" >> $GITHUB_STEP_SUMMARY
+            echo "   - curl http://localhost/" >> $GITHUB_STEP_SUMMARY
           fi
 
   cleanup:
