@@ -127,26 +127,20 @@ class AmazonScrapingService
     }
 
     /**
-     * 🔄 NOUVELLE MÉTHODE: Normaliser les URLs Amazon
+     * Normaliser les URLs Amazon
      * Convertit les liens mobiles en liens desktop pour avoir plus de données
      */
     private function normalizeAmazonUrl(string $url): string
     {
-        // Extraire l'ASIN
         $asin = $this->extractAsinFromUrl($url);
         if (!$asin) {
-            return $url; // Retourner l'URL originale si pas d'ASIN
+            return $url;
         }
 
-        // Extraire le domaine de base
         $baseUrl = $this->getAmazonBaseUrl($url);
-
-        // 🎯 Construire l'URL desktop canonique
-        // Format: https://www.amazon.XX/dp/{ASIN}
         $canonicalUrl = "{$baseUrl}/dp/{$asin}";
 
         Log::debug("URL normalized: {$url} → {$canonicalUrl}");
-
         return $canonicalUrl;
     }
 
@@ -158,32 +152,35 @@ class AmazonScrapingService
         if ($url) {
             $host = parse_url($url, PHP_URL_HOST) ?? '';
             $host = strtolower($host);
-            
-            // Remplacer les domaines mobiles par les domaines desktop
             $host = str_replace('m.amazon', 'www.amazon', $host);
             
-            // Check short URLs first
-            if (str_contains($host, 'amzn.com.br')) return 'https://www.amazon.com.br';
-            if (str_contains($host, 'amzn.co.uk')) return 'https://www.amazon.co.uk';
-            if (str_contains($host, 'amzn.de')) return 'https://www.amazon.de';
-            if (str_contains($host, 'amzn.fr')) return 'https://www.amazon.fr';
-            if (str_contains($host, 'amzn.it')) return 'https://www.amazon.it';
-            if (str_contains($host, 'amzn.es')) return 'https://www.amazon.es';
-            if (str_contains($host, 'amzn.in')) return 'https://www.amazon.in';
-            if (str_contains($host, 'amzn.ca')) return 'https://www.amazon.ca';
-            if (str_contains($host, 'amzn.eu')) return 'https://www.amazon.eu';
-            
-            // Check specific domains
-            if (str_contains($host, 'amazon.com.br')) return 'https://www.amazon.com.br';
-            if (str_contains($host, 'amazon.co.uk')) return 'https://www.amazon.co.uk';
-            if (str_contains($host, 'amazon.de')) return 'https://www.amazon.de';
-            if (str_contains($host, 'amazon.fr')) return 'https://www.amazon.fr';
-            if (str_contains($host, 'amazon.it')) return 'https://www.amazon.it';
-            if (str_contains($host, 'amazon.es')) return 'https://www.amazon.es';
-            if (str_contains($host, 'amazon.in')) return 'https://www.amazon.in';
-            if (str_contains($host, 'amazon.ca')) return 'https://www.amazon.ca';
-            if (str_contains($host, 'amazon.eu')) return 'https://www.amazon.eu';
-            if (str_contains($host, 'amazon.com')) return 'https://www.amazon.com';
+            $domainMap = [
+                'amzn.com.br' => 'https://www.amazon.com.br',
+                'amzn.co.uk' => 'https://www.amazon.co.uk',
+                'amzn.de' => 'https://www.amazon.de',
+                'amzn.fr' => 'https://www.amazon.fr',
+                'amzn.it' => 'https://www.amazon.it',
+                'amzn.es' => 'https://www.amazon.es',
+                'amzn.in' => 'https://www.amazon.in',
+                'amzn.ca' => 'https://www.amazon.ca',
+                'amzn.eu' => 'https://www.amazon.eu',
+                'amazon.com.br' => 'https://www.amazon.com.br',
+                'amazon.co.uk' => 'https://www.amazon.co.uk',
+                'amazon.de' => 'https://www.amazon.de',
+                'amazon.fr' => 'https://www.amazon.fr',
+                'amazon.it' => 'https://www.amazon.it',
+                'amazon.es' => 'https://www.amazon.es',
+                'amazon.in' => 'https://www.amazon.in',
+                'amazon.ca' => 'https://www.amazon.ca',
+                'amazon.eu' => 'https://www.amazon.eu',
+                'amazon.com' => 'https://www.amazon.com',
+            ];
+
+            foreach ($domainMap as $domain => $baseUrl) {
+                if (str_contains($host, $domain)) {
+                    return $baseUrl;
+                }
+            }
         }
         
         return 'https://www.amazon.com';
@@ -195,12 +192,12 @@ class AmazonScrapingService
     private function extractAsinFromUrl(string $url): ?string
     {
         $patterns = [
-            '/\/dp\/([A-Z0-9]{10})/',           // Desktop: /dp/ASIN
-            '/\/product\/([A-Z0-9]{10})/',      // Desktop: /product/ASIN
-            '/\/gp\/product\/([A-Z0-9]{10})/',  // Desktop: /gp/product/ASIN
-            '/\/gp\/aw\/d\/([A-Z0-9]{10})/',    // 📱 Mobile: /gp/aw/d/ASIN
-            '/\/aw\/d\/([A-Z0-9]{10})/',        // 📱 Mobile court
-            '/\/[^\/]*\/([A-Z0-9]{10})/',       // Pattern générique
+            '/\/dp\/([A-Z0-9]{10})/',
+            '/\/product\/([A-Z0-9]{10})/',
+            '/\/gp\/product\/([A-Z0-9]{10})/',
+            '/\/gp\/aw\/d\/([A-Z0-9]{10})/',
+            '/\/aw\/d\/([A-Z0-9]{10})/',
+            '/\/[^\/]*\/([A-Z0-9]{10})/',
         ];
 
         foreach ($patterns as $pattern) {
@@ -218,61 +215,44 @@ class AmazonScrapingService
     private function extractAllProductData(string $html, string $url, string $asin, string $marketplace, string $country): array
     {
         return [
-            // BASIC INFO
             'asin' => $asin,
             'amazon_url' => $url,
             'marketplace' => $marketplace,
             'country' => $country,
-            
-            // PRODUCT NAME
             'title' => $this->extractTitle($html),
             'name' => $this->extractTitle($html),
-            
-            // PRICING
             'price' => $this->extractPrice($html, $url),
             'current_price' => $this->extractPrice($html, $url),
             'original_price' => $this->extractOriginalPrice($html),
             'currency' => $this->getCurrencyFromMarketplace($marketplace),
             'discount_percentage' => $this->calculateDiscount(
                 $this->extractOriginalPrice($html),
-                $this->extractPrice($html)
+                $this->extractPrice($html, $url)
             ),
-            
-            // RATINGS & REVIEWS ⭐
             'rating' => $this->extractRating($html),
             'stars' => $this->extractRating($html),
             'review_count' => $this->extractReviewCount($html),
             'number_of_reviews' => $this->extractReviewCount($html),
-            
-            // AVAILABILITY & STOCK 📦
             'availability' => $this->extractAvailability($html),
             'in_stock' => $this->isInStock($html),
             'stock_quantity' => $this->extractStockQuantity($html),
             'stock_status' => $this->getStockStatus($html),
-            
-            // CATEGORIES 🏷️
             'category' => $this->extractMainCategory($html),
             'categories' => $this->extractAllCategories($html),
             'category_path' => $this->extractCategoryPath($html),
-            
-            // IMAGES & MEDIA
             'image_url' => $this->extractMainImage($html),
             'images' => $this->extractAllImages($html),
-            
-            // ADDITIONAL INFO
             'description' => $this->extractDescription($html),
             'features' => $this->extractFeatures($html),
             'brand' => $this->extractBrand($html),
             'seller' => $this->extractSeller($html),
             'is_prime' => $this->isPrimeEligible($html),
-            
-            // METADATA
             'scraped_at' => now()->toIso8601String(),
         ];
     }
 
     /**
-     * Extract product title/name (COMPLET)
+     * Extract product title/name
      */
     private function extractTitle(string $html): ?string
     {
@@ -301,7 +281,7 @@ class AmazonScrapingService
     }
 
     /**
-     * Extract rating (nombre d'étoiles) ⭐
+     * Extract rating
      */
     private function extractRating(string $html): ?float
     {
@@ -327,7 +307,7 @@ class AmazonScrapingService
     }
 
     /**
-     * Extract review count (nombre d'avis) 💬
+     * Extract review count
      */
     private function extractReviewCount(string $html): ?int
     {
@@ -353,7 +333,7 @@ class AmazonScrapingService
     }
 
     /**
-     * Extract stock quantity (nombre en stock) 📦
+     * Extract stock quantity
      */
     private function extractStockQuantity(string $html): ?int
     {
@@ -368,7 +348,6 @@ class AmazonScrapingService
         foreach ($patterns as $pattern) {
             if (preg_match($pattern, $html, $matches)) {
                 $quantity = intval($matches[1]);
-                
                 if ($quantity > 0 && $quantity < 1000) {
                     return $quantity;
                 }
@@ -383,25 +362,24 @@ class AmazonScrapingService
      */
     private function isInStock(string $html): bool
     {
-        $inStockIndicators = [
-            'in stock', 'en stock', 'auf lager', 'disponible',
-            'available', 'add to cart', 'ajouter au panier',
-            'in den einkaufswagen', 'aggiungi al carrello',
-        ];
-
+        $htmlLower = strtolower($html);
+        
         $outOfStockIndicators = [
             'out of stock', 'rupture de stock', 'non disponible',
             'currently unavailable', 'actuellement indisponible',
             'nicht verfügbar', 'non disponibile',
         ];
 
-        $htmlLower = strtolower($html);
-
         foreach ($outOfStockIndicators as $indicator) {
             if (str_contains($htmlLower, $indicator)) {
                 return false;
             }
         }
+
+        $inStockIndicators = [
+            'in stock', 'en stock', 'auf lager', 'disponible',
+            'available', 'add to cart', 'ajouter au panier',
+        ];
 
         foreach ($inStockIndicators as $indicator) {
             if (str_contains($htmlLower, $indicator)) {
@@ -423,10 +401,7 @@ class AmazonScrapingService
 
         $quantity = $this->extractStockQuantity($html);
         if ($quantity !== null) {
-            if ($quantity <= 5) {
-                return 'low_stock';
-            }
-            return 'in_stock_limited';
+            return $quantity <= 5 ? 'low_stock' : 'in_stock_limited';
         }
 
         return 'in_stock';
@@ -458,26 +433,20 @@ class AmazonScrapingService
     }
 
     /**
-     * Extract main category 🏷️
+     * Extract main category
      */
     private function extractMainCategory(string $html): ?string
     {
         $categories = $this->extractAllCategories($html);
-        
-        if (!empty($categories)) {
-            return end($categories);
-        }
-
-        return null;
+        return !empty($categories) ? end($categories) : null;
     }
 
     /**
-     * Extract ALL categories (breadcrumb) 🏷️
+     * Extract ALL categories (breadcrumb)
      */
     private function extractAllCategories(string $html): array
     {
         $categories = [];
-
         $patterns = [
             '/<div[^>]*id="wayfinding-breadcrumbs_feature_div"[^>]*>(.*?)<\/div>/is',
             '/<ul[^>]*class="[^"]*a-breadcrumb[^"]*"[^>]*>(.*?)<\/ul>/is',
@@ -504,49 +473,45 @@ class AmazonScrapingService
     }
 
     /**
-     * Extract category path (chemin complet)
+     * Extract category path
      */
     private function extractCategoryPath(string $html): ?string
     {
         $categories = $this->extractAllCategories($html);
-        
-        if (!empty($categories)) {
-            return implode(' > ', $categories);
-        }
-
-        return null;
+        return !empty($categories) ? implode(' > ', $categories) : null;
     }
 
     /**
-     * Extract price
+     * Extract price - VERSION AMÉLIORÉE
      */
     private function extractPrice(string $html, ?string $url = null): ?float
     {
-        // Si l'URL n'est pas fournie, essayer d'extraire depuis le HTML
+        // 1. Essayer JSON-LD (le plus fiable)
+        $price = $this->extractPriceFromJsonLd($html);
+        if ($price !== null) {
+            Log::debug("Price extracted from JSON-LD: {$price}");
+            return $price;
+        }
+
+        // 2. Essayer JavaScript embarqué
+        $price = $this->extractPriceFromJavaScript($html);
+        if ($price !== null) {
+            Log::debug("Price extracted from JavaScript: {$price}");
+            return $price;
+        }
+
+        // 3. Patterns HTML améliorés
         $marketplace = $url ? $this->extractMarketplaceFromUrl($url) : 'US';
         $currencySymbols = $this->getCurrencySymbolsForMarketplace($marketplace);
         
-        // 1. Essayer d'extraire depuis les données JSON-LD (plus fiable)
-        $price = $this->extractPriceFromJsonLd($html);
-        if ($price !== null) {
-            return $price;
-        }
-
-        // 2. Essayer d'extraire depuis les données JavaScript
-        $price = $this->extractPriceFromJavaScript($html);
-        if ($price !== null) {
-            return $price;
-        }
-
-        // 3. Patterns HTML classiques
         $patterns = [
-            // Format avec whole et fraction séparés
+            // Format avec whole et fraction séparés (le plus courant)
             '/<span[^>]*class="[^"]*a-price-whole[^"]*"[^>]*>([0-9.,]+)<\/span>\s*<span[^>]*class="[^"]*a-price-fraction[^"]*"[^>]*>([0-9]+)<\/span>/is',
             '/<span[^>]*class="[^"]*a-price-whole[^"]*"[^>]*>([0-9.,]+)<\/span>/is',
             // Format avec a-offscreen (prix caché mais accessible)
             '/<span[^>]*class="[^"]*a-price[^"]*"[^>]*>.*?<span[^>]*class="[^"]*a-offscreen[^"]*"[^>]*>([^<]+)<\/span>/is',
             '/<span[^>]*class="[^"]*a-offscreen[^"]*"[^>]*>([^<]+)<\/span>/is',
-            // IDs spécifiques
+            // IDs spécifiques Amazon
             '/<span[^>]*id="priceblock_ourprice"[^>]*>([^<]+)<\/span>/is',
             '/<span[^>]*id="priceblock_dealprice"[^>]*>([^<]+)<\/span>/is',
             '/<span[^>]*id="priceblock_saleprice"[^>]*>([^<]+)<\/span>/is',
@@ -563,16 +528,11 @@ class AmazonScrapingService
 
         foreach ($patterns as $pattern) {
             if (preg_match($pattern, $html, $matches)) {
-                if (isset($matches[2])) {
-                    $priceStr = $matches[1] . '.' . $matches[2];
-                } else {
-                    $priceStr = $matches[1];
-                }
-                
+                $priceStr = isset($matches[2]) ? $matches[1] . '.' . $matches[2] : $matches[1];
                 $price = $this->parsePriceString($priceStr);
                 
                 if ($price !== null && $price > 0 && $price < 1000000) {
-                    Log::debug("Price extracted via pattern: {$price}");
+                    Log::debug("Price extracted via HTML pattern: {$price}");
                     return $price;
                 }
             }
@@ -587,30 +547,35 @@ class AmazonScrapingService
      */
     private function extractPriceFromJsonLd(string $html): ?float
     {
-        // Chercher les données JSON-LD
-        if (preg_match('/<script[^>]*type="application\/ld\+json"[^>]*>(.*?)<\/script>/is', $html, $matches)) {
-            $jsonData = json_decode($matches[1], true);
-            
-            if (is_array($jsonData)) {
-                // Essayer d'extraire le prix depuis différentes structures
-                if (isset($jsonData['offers']['price'])) {
-                    $price = $this->parsePriceString((string)$jsonData['offers']['price']);
-                    if ($price !== null) {
-                        return $price;
-                    }
-                }
+        if (preg_match_all('/<script[^>]*type="application\/ld\+json"[^>]*>(.*?)<\/script>/is', $html, $matches)) {
+            foreach ($matches[1] as $jsonStr) {
+                $jsonData = json_decode($jsonStr, true);
                 
-                if (isset($jsonData['offers'][0]['price'])) {
-                    $price = $this->parsePriceString((string)$jsonData['offers'][0]['price']);
-                    if ($price !== null) {
-                        return $price;
+                if (is_array($jsonData)) {
+                    // Structure simple
+                    if (isset($jsonData['offers']['price'])) {
+                        $price = $this->parsePriceString((string)$jsonData['offers']['price']);
+                        if ($price !== null) return $price;
                     }
-                }
-                
-                if (isset($jsonData['price'])) {
-                    $price = $this->parsePriceString((string)$jsonData['price']);
-                    if ($price !== null) {
-                        return $price;
+                    
+                    // Structure avec array d'offers
+                    if (isset($jsonData['offers'][0]['price'])) {
+                        $price = $this->parsePriceString((string)$jsonData['offers'][0]['price']);
+                        if ($price !== null) return $price;
+                    }
+                    
+                    // Structure directe
+                    if (isset($jsonData['price'])) {
+                        $price = $this->parsePriceString((string)$jsonData['price']);
+                        if ($price !== null) return $price;
+                    }
+                    
+                    // Structure avec @type Product
+                    if (isset($jsonData['@type']) && $jsonData['@type'] === 'Product') {
+                        if (isset($jsonData['offers']['price'])) {
+                            $price = $this->parsePriceString((string)$jsonData['offers']['price']);
+                            if ($price !== null) return $price;
+                        }
                     }
                 }
             }
@@ -624,21 +589,21 @@ class AmazonScrapingService
      */
     private function extractPriceFromJavaScript(string $html): ?float
     {
-        // Chercher dans les données JavaScript embarquées
         $patterns = [
             '/"price"\s*:\s*"?([0-9.,]+)"?/i',
             '/"priceAmount"\s*:\s*"?([0-9.,]+)"?/i',
             '/"displayPrice"\s*:\s*"?([0-9.,]+)"?/i',
             '/"buyingPrice"\s*:\s*"?([0-9.,]+)"?/i',
+            '/"currentPrice"\s*:\s*"?([0-9.,]+)"?/i',
             '/twister\.price\s*=\s*"?([0-9.,]+)"?/i',
             '/var\s+price\s*=\s*"?([0-9.,]+)"?/i',
+            '/priceToPay["\']?\s*:\s*["\']?([0-9.,]+)/i',
         ];
 
         foreach ($patterns as $pattern) {
             if (preg_match($pattern, $html, $matches)) {
                 $price = $this->parsePriceString($matches[1]);
                 if ($price !== null && $price > 0) {
-                    Log::debug("Price extracted from JavaScript: {$price}");
                     return $price;
                 }
             }
@@ -660,7 +625,6 @@ class AmazonScrapingService
         foreach ($patterns as $pattern) {
             if (preg_match($pattern, $html, $matches)) {
                 $price = $this->parsePriceString($matches[1]);
-                
                 if ($price !== null && $price > 0) {
                     return $price;
                 }
@@ -678,19 +642,22 @@ class AmazonScrapingService
         $priceStr = preg_replace('/[^\d.,\s]/', '', $priceStr);
         $priceStr = trim($priceStr);
 
+        // Gérer les formats européens (virgule comme séparateur décimal)
         if (strpos($priceStr, ',') !== false && strpos($priceStr, '.') !== false) {
+            // Format: 1.234,56 → 1234.56
             $priceStr = str_replace(['.', ','], ['', '.'], $priceStr);
         } elseif (strpos($priceStr, ',') !== false) {
             $parts = explode(',', $priceStr);
+            // Si la partie après la virgule fait 2 chiffres ou moins, c'est probablement des centimes
             if (count($parts) == 2 && strlen($parts[1]) <= 2) {
                 $priceStr = str_replace(',', '.', $priceStr);
             } else {
+                // Sinon, c'est probablement un séparateur de milliers
                 $priceStr = str_replace(',', '', $priceStr);
             }
         }
 
         $price = floatval($priceStr);
-        
         return $price > 0 ? $price : null;
     }
 
@@ -708,23 +675,25 @@ class AmazonScrapingService
     }
 
     /**
-     * Extract main image
+     * Extract main image - VERSION AMÉLIORÉE
      */
     private function extractMainImage(string $html): ?string
     {
-        // 1. Essayer d'extraire depuis les données JSON-LD
+        // 1. Essayer JSON-LD (le plus fiable)
         $imageUrl = $this->extractImageFromJsonLd($html);
         if ($imageUrl !== null) {
+            Log::debug("Image extracted from JSON-LD: {$imageUrl}");
             return $imageUrl;
         }
 
-        // 2. Essayer d'extraire depuis les données JavaScript
+        // 2. Essayer JavaScript embarqué
         $imageUrl = $this->extractImageFromJavaScript($html);
         if ($imageUrl !== null) {
+            Log::debug("Image extracted from JavaScript: {$imageUrl}");
             return $imageUrl;
         }
 
-        // 3. Patterns HTML classiques
+        // 3. Patterns HTML améliorés
         $patterns = [
             // ID landingImage (le plus courant)
             '/<img[^>]*id="landingImage"[^>]*src="([^"]*)"[^>]*>/i',
@@ -757,12 +726,7 @@ class AmazonScrapingService
                     }
                 }
                 
-                if (!empty($imageUrl) && 
-                    !str_contains($imageUrl, 'sprite') &&
-                    !str_contains($imageUrl, 'placeholder') &&
-                    !str_contains($imageUrl, '1x1') &&
-                    (filter_var($imageUrl, FILTER_VALIDATE_URL) || str_starts_with($imageUrl, 'http'))) {
-                    Log::debug("Image extracted: {$imageUrl}");
+                if ($this->isValidImageUrl($imageUrl)) {
                     return $imageUrl;
                 }
             }
@@ -773,26 +737,48 @@ class AmazonScrapingService
     }
 
     /**
+     * Validate image URL
+     */
+    private function isValidImageUrl(string $url): bool
+    {
+        return !empty($url) && 
+               !str_contains($url, 'sprite') &&
+               !str_contains($url, 'placeholder') &&
+               !str_contains($url, '1x1') &&
+               (filter_var($url, FILTER_VALIDATE_URL) || str_starts_with($url, 'http'));
+    }
+
+    /**
      * Extract image from JSON-LD structured data
      */
     private function extractImageFromJsonLd(string $html): ?string
     {
-        // Chercher les données JSON-LD
-        if (preg_match('/<script[^>]*type="application\/ld\+json"[^>]*>(.*?)<\/script>/is', $html, $matches)) {
-            $jsonData = json_decode($matches[1], true);
-            
-            if (is_array($jsonData)) {
-                // Essayer d'extraire l'image depuis différentes structures
-                if (isset($jsonData['image'])) {
-                    if (is_string($jsonData['image'])) {
-                        return $jsonData['image'];
-                    } elseif (is_array($jsonData['image']) && !empty($jsonData['image'])) {
-                        return is_string($jsonData['image'][0]) ? $jsonData['image'][0] : $jsonData['image'][0]['url'] ?? null;
-                    }
-                }
+        if (preg_match_all('/<script[^>]*type="application\/ld\+json"[^>]*>(.*?)<\/script>/is', $html, $matches)) {
+            foreach ($matches[1] as $jsonStr) {
+                $jsonData = json_decode($jsonStr, true);
                 
-                if (isset($jsonData['offers']['image'])) {
-                    return $jsonData['offers']['image'];
+                if (is_array($jsonData)) {
+                    // Structure simple
+                    if (isset($jsonData['image'])) {
+                        if (is_string($jsonData['image'])) {
+                            return $jsonData['image'];
+                        } elseif (is_array($jsonData['image']) && !empty($jsonData['image'])) {
+                            $firstImage = $jsonData['image'][0];
+                            return is_string($firstImage) ? $firstImage : ($firstImage['url'] ?? null);
+                        }
+                    }
+                    
+                    // Structure avec @type Product
+                    if (isset($jsonData['@type']) && $jsonData['@type'] === 'Product') {
+                        if (isset($jsonData['image'])) {
+                            if (is_string($jsonData['image'])) {
+                                return $jsonData['image'];
+                            } elseif (is_array($jsonData['image']) && !empty($jsonData['image'])) {
+                                $firstImage = $jsonData['image'][0];
+                                return is_string($firstImage) ? $firstImage : ($firstImage['url'] ?? null);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -805,7 +791,6 @@ class AmazonScrapingService
      */
     private function extractImageFromJavaScript(string $html): ?string
     {
-        // Chercher dans les données JavaScript embarquées
         $patterns = [
             '/"mainImage"\s*:\s*"([^"]+)"/i',
             '/"largeImage"\s*:\s*"([^"]+)"/i',
@@ -817,14 +802,9 @@ class AmazonScrapingService
 
         foreach ($patterns as $pattern) {
             if (preg_match($pattern, $html, $matches)) {
-                $imageUrl = str_replace('\\/', '/', $matches[1]);
-                $imageUrl = str_replace('&amp;', '&', trim($imageUrl));
+                $imageUrl = str_replace(['\\/', '&amp;'], ['/', '&'], trim($matches[1]));
                 
-                if (!empty($imageUrl) && 
-                    !str_contains($imageUrl, 'sprite') &&
-                    !str_contains($imageUrl, 'placeholder') &&
-                    (filter_var($imageUrl, FILTER_VALIDATE_URL) || str_starts_with($imageUrl, 'http'))) {
-                    Log::debug("Image extracted from JavaScript: {$imageUrl}");
+                if ($this->isValidImageUrl($imageUrl)) {
                     return $imageUrl;
                 }
             }
@@ -845,7 +825,6 @@ class AmazonScrapingService
             preg_match_all('/"hiRes"\s*:\s*"(https?:\/\/[^"]+)"/i', $matches[1], $imageMatches);
             $images = array_merge($images, $imageMatches[1]);
             
-            // Aussi chercher large et medium
             preg_match_all('/"large"\s*:\s*"(https?:\/\/[^"]+)"/i', $matches[1], $imageMatches);
             $images = array_merge($images, $imageMatches[1]);
         }
@@ -881,11 +860,7 @@ class AmazonScrapingService
         }, $images);
 
         $images = array_filter($images, function($url) {
-            return !empty($url) && 
-                   !str_contains($url, 'sprite') &&
-                   !str_contains($url, 'placeholder') &&
-                   !str_contains($url, '1x1') &&
-                   (filter_var($url, FILTER_VALIDATE_URL) || str_starts_with($url, 'http'));
+            return $this->isValidImageUrl($url);
         });
 
         return array_values(array_unique($images));
@@ -1050,28 +1025,33 @@ class AmazonScrapingService
         $host = parse_url($url, PHP_URL_HOST) ?? '';
         $host = strtolower($host);
         
-        // Check short URLs first
-        if (str_contains($host, 'amzn.com.br')) return 'BR';
-        if (str_contains($host, 'amzn.co.uk')) return 'UK';
-        if (str_contains($host, 'amzn.de')) return 'DE';
-        if (str_contains($host, 'amzn.fr')) return 'FR';
-        if (str_contains($host, 'amzn.it')) return 'IT';
-        if (str_contains($host, 'amzn.es')) return 'ES';
-        if (str_contains($host, 'amzn.in')) return 'IN';
-        if (str_contains($host, 'amzn.ca')) return 'CA';
-        if (str_contains($host, 'amzn.eu')) return 'EU';
-        
-        // Check specific domains
-        if (str_contains($host, 'amazon.com.br')) return 'BR';
-        if (str_contains($host, 'amazon.co.uk')) return 'UK';
-        if (str_contains($host, 'amazon.de')) return 'DE';
-        if (str_contains($host, 'amazon.fr')) return 'FR';
-        if (str_contains($host, 'amazon.it')) return 'IT';
-        if (str_contains($host, 'amazon.es')) return 'ES';
-        if (str_contains($host, 'amazon.in')) return 'IN';
-        if (str_contains($host, 'amazon.ca')) return 'CA';
-        if (str_contains($host, 'amazon.eu')) return 'EU';
-        if (str_contains($host, 'amazon.com')) return 'US';
+        $marketplaceMap = [
+            'amzn.com.br' => 'BR',
+            'amzn.co.uk' => 'UK',
+            'amzn.de' => 'DE',
+            'amzn.fr' => 'FR',
+            'amzn.it' => 'IT',
+            'amzn.es' => 'ES',
+            'amzn.in' => 'IN',
+            'amzn.ca' => 'CA',
+            'amzn.eu' => 'EU',
+            'amazon.com.br' => 'BR',
+            'amazon.co.uk' => 'UK',
+            'amazon.de' => 'DE',
+            'amazon.fr' => 'FR',
+            'amazon.it' => 'IT',
+            'amazon.es' => 'ES',
+            'amazon.in' => 'IN',
+            'amazon.ca' => 'CA',
+            'amazon.eu' => 'EU',
+            'amazon.com' => 'US',
+        ];
+
+        foreach ($marketplaceMap as $domain => $marketplace) {
+            if (str_contains($host, $domain)) {
+                return $marketplace;
+            }
+        }
         
         return 'US';
     }
@@ -1203,27 +1183,5 @@ class AmazonScrapingService
             'success' => false,
             'error' => 'Failed after ' . $maxRetries . ' attempts',
         ];
-    }
-
-    /**
-     * Get fallback image URL from ASIN
-     * Format: https://images-na.ssl-images-amazon.com/images/I/{ASIN_HASH}.{EXT}
-     */
-    private function getFallbackImageUrl(string $asin, string $marketplace): ?string
-    {
-        $baseUrl = $this->getAmazonBaseUrl(null);
-        
-        // Construire l'URL d'image standard d'Amazon
-        // Format: https://m.media-amazon.com/images/I/{hash}.{ext}
-        // On peut essayer plusieurs formats courants
-        $imageFormats = [
-            "https://m.media-amazon.com/images/I/{$asin}._AC_SL1500_.jpg",
-            "https://images-na.ssl-images-amazon.com/images/I/{$asin}._AC_SL1500_.jpg",
-            "https://images-eu.ssl-images-amazon.com/images/I/{$asin}._AC_SL1500_.jpg",
-        ];
-
-        // Note: Cette méthode ne garantit pas que l'image existe
-        // Mais c'est mieux que de retourner null
-        return $imageFormats[0] ?? null;
     }
 }
