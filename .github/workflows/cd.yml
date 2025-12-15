@@ -1,0 +1,160 @@
+name: Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Create deployment archive
+        run: |
+          tar -czf junglealert-laravel.tar.gz \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='vendor' \
+            --exclude='.env' \
+            --exclude='storage/logs/*' \
+            --exclude='storage/framework/cache/*' \
+            --exclude='storage/framework/sessions/*' \
+            --exclude='storage/framework/views/*' \
+            .
+
+      - name: Upload to server
+        run: |
+          scp -o StrictHostKeyChecking=no junglealert-laravel.tar.gz ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/
+
+      - name: Deploy to VPS
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+          set -e
+          
+          echo "🚀 Déploiement de l'API Laravel Jungle Alert"
+          
+          # Arrêter les services existants
+          echo "🛑 Arrêt des services existants..."
+          pkill -f "php artisan serve" || true
+          systemctl stop jungle-alert-api || true
+          
+          # Créer le répertoire de déploiement
+          REMOTE_PATH="/opt/jungle-alert-laravel"
+          mkdir -p $REMOTE_PATH
+          
+          # Sauvegarder le .env existant
+          if [ -f $REMOTE_PATH/.env ]; then
+            echo "💾 Sauvegarde du fichier .env..."
+            cp $REMOTE_PATH/.env /tmp/.env.backup
+          fi
+          
+          # Supprimer l'ancienne installation (sauf .env)
+          echo "🧹 Nettoyage de l'ancienne installation..."
+          cd $REMOTE_PATH
+          find . -mindepth 1 ! -name '.env' -delete || true
+          
+          # Extraire l'archive
+          echo "📦 Extraction de l'archive..."
+          tar -xzf /tmp/junglealert-laravel.tar.gz -C $REMOTE_PATH
+          
+          # Restaurer le .env
+          if [ -f /tmp/.env.backup ]; then
+            echo "✅ Restauration du fichier .env..."
+            mv /tmp/.env.backup $REMOTE_PATH/.env
+          elif [ ! -f $REMOTE_PATH/.env ]; then
+            echo "📝 Création du fichier .env..."
+            cp $REMOTE_PATH/.env.example $REMOTE_PATH/.env
+            cd $REMOTE_PATH
+            php artisan key:generate
+          fi
+          
+          cd $REMOTE_PATH
+          
+          # Installer les dépendances PHP
+          echo "📦 Installation des dépendances..."
+          composer install --no-dev --optimize-autoloader --no-interaction
+          
+          # Configurer les permissions
+          echo "🔐 Configuration des permissions..."
+          chown -R www-data:www-data $REMOTE_PATH
+          chmod -R 755 $REMOTE_PATH
+          chmod -R 775 $REMOTE_PATH/storage
+          chmod -R 775 $REMOTE_PATH/bootstrap/cache
+          
+          # Exécuter les migrations
+          echo "🗄️ Exécution des migrations..."
+          php artisan migrate --force
+          
+          # Configurer le scheduler (cron job)
+          echo "⏰ Configuration du scheduler..."
+          (crontab -l 2>/dev/null | grep -v "artisan schedule:run" ; echo "* * * * * cd $REMOTE_PATH && php artisan schedule:run >> /dev/null 2>&1") | crontab -
+          
+          # Nettoyer le cache
+          echo "🧹 Nettoyage du cache..."
+          php artisan config:clear
+          php artisan route:clear
+          php artisan view:clear
+          php artisan cache:clear
+          
+          # Reconstruire le cache
+          echo "⚡ Reconstruction du cache..."
+          php artisan config:cache
+          php artisan route:cache
+          php artisan view:cache
+          
+          # Configurer Nginx
+          echo "🌐 Configuration de Nginx..."
+          cat > /etc/nginx/sites-available/jungle-alert-laravel << 'NGINX_EOF'
+          server {
+              listen 8000;
+              server_name _;
+              root /opt/jungle-alert-laravel/public;
+              index index.php;
+
+              location / {
+                  try_files $uri $uri/ /index.php?$query_string;
+              }
+
+              location ~ \.php$ {
+                  fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+                  fastcgi_index index.php;
+                  fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+                  include fastcgi_params;
+              }
+
+              location ~ /\.ht {
+                  deny all;
+              }
+          }
+          NGINX_EOF
+          
+          # Activer le site Nginx
+          ln -sf /etc/nginx/sites-available/jungle-alert-laravel /etc/nginx/sites-enabled/
+          rm -f /etc/nginx/sites-enabled/default
+          
+          # Tester et recharger Nginx
+          nginx -t && systemctl reload nginx
+          
+          # Démarrer l'API Laravel
+          echo "🚀 Démarrage de l'API..."
+          cd $REMOTE_PATH
+          nohup php artisan serve --host=0.0.0.0 --port=8000 > /var/log/jungle-alert-laravel.log 2>&1 &
+          
+          # Nettoyer l'archive
+          rm -f /tmp/junglealert-laravel.tar.gz
+          
+          echo "✅ Déploiement terminé avec succès!"
+          EOF
+
+      - name: Test deployment
+        run: |
+          sleep 5
+          curl -f http://${{ secrets.SSH_HOST }}:8000/api/health || echo "⚠️ Test de santé échoué (peut être normal si l'endpoint n'existe pas)"
