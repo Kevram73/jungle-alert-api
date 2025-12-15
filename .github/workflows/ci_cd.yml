@@ -249,6 +249,7 @@ jobs:
               ServerAdmin admin@jungle-alert.com
               DocumentRoot ${{ env.DEPLOY_PATH }}/public
               
+              
               <Directory ${{ env.DEPLOY_PATH }}/public>
                   Options -Indexes +FollowSymLinks
                   AllowOverride All
