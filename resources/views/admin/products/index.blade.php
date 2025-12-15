@@ -48,7 +48,7 @@
                     @forelse($products as $product)
                     <tr class="border-b hover:bg-gray-50">
                         <td class="py-3 px-4">{{ $product->id }}</td>
-                        <td class="py-3 px-4">{{ Str::limit($product->title, 50) }}</td>
+                        <td class="py-3 px-4">{{ str_limit($product->title, 50) }}</td>
                         <td class="py-3 px-4">{{ $product->user->email }}</td>
                         <td class="py-3 px-4">{{ number_format($product->current_price, 2) }} €</td>
                         <td class="py-3 px-4">{{ $product->target_price ? number_format($product->target_price, 2) . ' €' : 'N/A' }}</td>

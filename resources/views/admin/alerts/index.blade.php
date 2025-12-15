@@ -49,7 +49,7 @@
                     <tr class="border-b hover:bg-gray-50">
                         <td class="py-3 px-4">{{ $alert->id }}</td>
                         <td class="py-3 px-4">{{ $alert->user->email }}</td>
-                        <td class="py-3 px-4">{{ Str::limit($alert->product->title ?? 'N/A', 40) }}</td>
+                        <td class="py-3 px-4">{{ str_limit($alert->product->title ?? 'N/A', 40) }}</td>
                         <td class="py-3 px-4">{{ number_format($alert->target_price, 2) }} €</td>
                         <td class="py-3 px-4">
                             <span class="px-2 py-1 text-xs rounded bg-blue-200">{{ $alert->alert_type }}</span>

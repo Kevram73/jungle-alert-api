@@ -36,7 +36,7 @@
                     @forelse($priceHistories as $priceHistory)
                     <tr class="border-b hover:bg-gray-50">
                         <td class="py-3 px-4">{{ $priceHistory->id }}</td>
-                        <td class="py-3 px-4">{{ Str::limit($priceHistory->product->title ?? 'N/A', 50) }}</td>
+                        <td class="py-3 px-4">{{ str_limit($priceHistory->product->title ?? 'N/A', 50) }}</td>
                         <td class="py-3 px-4">{{ $priceHistory->product->user->email ?? 'N/A' }}</td>
                         <td class="py-3 px-4 font-bold">{{ number_format($priceHistory->price, 2) }} €</td>
                         <td class="py-3 px-4">{{ $priceHistory->recorded_at->format('d/m/Y H:i') }}</td>

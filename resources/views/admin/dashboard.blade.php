@@ -97,7 +97,7 @@
                 <tbody>
                     @foreach(\App\Models\Alert::with('product')->latest()->take(5)->get() as $alert)
                     <tr class="border-b">
-                        <td class="py-2">{{ Str::limit($alert->product->title ?? 'N/A', 30) }}</td>
+                        <td class="py-2">{{ str_limit($alert->product->title ?? 'N/A', 30) }}</td>
                         <td class="py-2">
                             <span class="px-2 py-1 text-xs rounded bg-blue-200">
                                 {{ $alert->alert_type }}

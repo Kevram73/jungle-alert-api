@@ -42,7 +42,7 @@
                     <tr class="border-b hover:bg-gray-50">
                         <td class="py-3 px-4">{{ $click->id }}</td>
                         <td class="py-3 px-4">{{ $click->user->email }}</td>
-                        <td class="py-3 px-4">{{ Str::limit($click->product->title ?? 'N/A', 50) }}</td>
+                        <td class="py-3 px-4">{{ str_limit($click->product->title ?? 'N/A', 50) }}</td>
                         <td class="py-3 px-4">{{ $click->clicked_at->format('d/m/Y H:i') }}</td>
                         <td class="py-3 px-4">
                             <a href="{{ route('admin.affiliate-clicks.show', $click) }}" class="text-blue-600 hover:text-blue-800">
