@@ -564,27 +564,76 @@ class AmazonScrapingService
                 if (is_array($jsonData)) {
                     // Structure simple
                     if (isset($jsonData['offers']['price'])) {
-                        $price = $this->parsePriceString((string)$jsonData['offers']['price']);
-                        if ($price !== null) return $price;
+                        $priceValue = $jsonData['offers']['price'];
+                        // Si c'est déjà un nombre, le retourner directement
+                        if (is_numeric($priceValue)) {
+                            $price = floatval($priceValue);
+                            if ($price > 0 && $price < 1000000) {
+                                Log::debug("Price from JSON-LD (numeric): {$price}");
+                                return $price;
+                            }
+                        } else {
+                            $price = $this->parsePriceString((string)$priceValue);
+                            if ($price !== null) {
+                                Log::debug("Price from JSON-LD (string): {$price} (from: {$priceValue})");
+                                return $price;
+                            }
+                        }
                     }
                     
                     // Structure avec array d'offers
                     if (isset($jsonData['offers'][0]['price'])) {
-                        $price = $this->parsePriceString((string)$jsonData['offers'][0]['price']);
-                        if ($price !== null) return $price;
+                        $priceValue = $jsonData['offers'][0]['price'];
+                        if (is_numeric($priceValue)) {
+                            $price = floatval($priceValue);
+                            if ($price > 0 && $price < 1000000) {
+                                Log::debug("Price from JSON-LD array (numeric): {$price}");
+                                return $price;
+                            }
+                        } else {
+                            $price = $this->parsePriceString((string)$priceValue);
+                            if ($price !== null) {
+                                Log::debug("Price from JSON-LD array (string): {$price} (from: {$priceValue})");
+                                return $price;
+                            }
+                        }
                     }
                     
                     // Structure directe
                     if (isset($jsonData['price'])) {
-                        $price = $this->parsePriceString((string)$jsonData['price']);
-                        if ($price !== null) return $price;
+                        $priceValue = $jsonData['price'];
+                        if (is_numeric($priceValue)) {
+                            $price = floatval($priceValue);
+                            if ($price > 0 && $price < 1000000) {
+                                Log::debug("Price from JSON-LD direct (numeric): {$price}");
+                                return $price;
+                            }
+                        } else {
+                            $price = $this->parsePriceString((string)$priceValue);
+                            if ($price !== null) {
+                                Log::debug("Price from JSON-LD direct (string): {$price} (from: {$priceValue})");
+                                return $price;
+                            }
+                        }
                     }
                     
                     // Structure avec @type Product
                     if (isset($jsonData['@type']) && $jsonData['@type'] === 'Product') {
                         if (isset($jsonData['offers']['price'])) {
-                            $price = $this->parsePriceString((string)$jsonData['offers']['price']);
-                            if ($price !== null) return $price;
+                            $priceValue = $jsonData['offers']['price'];
+                            if (is_numeric($priceValue)) {
+                                $price = floatval($priceValue);
+                                if ($price > 0 && $price < 1000000) {
+                                    Log::debug("Price from JSON-LD Product (numeric): {$price}");
+                                    return $price;
+                                }
+                            } else {
+                                $price = $this->parsePriceString((string)$priceValue);
+                                if ($price !== null) {
+                                    Log::debug("Price from JSON-LD Product (string): {$price} (from: {$priceValue})");
+                                    return $price;
+                                }
+                            }
                         }
                     }
                 }
@@ -646,17 +695,32 @@ class AmazonScrapingService
 
     /**
      * Parse price string to float
-     * Gère les formats: 39.00, 39,00, 1.234,56, 1234.56, etc.
+     * Gère les formats: 39.00, 39,00, 1.234,56, 1234.56, 426.01, (avec virgule en fin), etc.
      */
     private function parsePriceString(string $priceStr): ?float
     {
+        // Si c'est déjà un nombre, le retourner directement
+        if (is_numeric($priceStr)) {
+            $price = floatval($priceStr);
+            if ($price > 0 && $price < 1000000) {
+                return $price;
+            }
+            return null;
+        }
+        
         // Nettoyer la chaîne (garder seulement chiffres, virgules, points)
         $priceStr = preg_replace('/[^\d.,]/', '', $priceStr);
         $priceStr = trim($priceStr);
         
+        // Supprimer les virgules et points en fin de chaîne (artefacts de regex)
+        $priceStr = rtrim($priceStr, ',.');
+        
         if (empty($priceStr)) {
             return null;
         }
+
+        // Log pour déboguer
+        Log::debug("Parsing price string: '{$priceStr}'");
 
         // Cas 1: Les deux séparateurs présents (point ET virgule)
         if (strpos($priceStr, ',') !== false && strpos($priceStr, '.') !== false) {
@@ -677,25 +741,40 @@ class AmazonScrapingService
         // Cas 2: Seulement une virgule
         elseif (strpos($priceStr, ',') !== false) {
             $parts = explode(',', $priceStr);
-            // Si on a exactement 2 parties et la partie après la virgule fait 2 chiffres ou moins
-            // C'est probablement un format européen (39,00 → 39.00)
-            if (count($parts) == 2 && strlen($parts[1]) <= 2) {
-                $priceStr = str_replace(',', '.', $priceStr);
+            // Filtrer les parties vides (au cas où il y aurait des virgules en fin)
+            $parts = array_filter($parts, function($part) { return !empty($part); });
+            $parts = array_values($parts);
+            
+            // Si on a exactement 2 parties
+            if (count($parts) == 2) {
+                // Si la partie après la virgule fait 2 chiffres ou moins, c'est un format européen (39,00 → 39.00)
+                if (strlen($parts[1]) <= 2) {
+                    $priceStr = $parts[0] . '.' . $parts[1];
+                } else {
+                    // Si plus de 2 chiffres après la virgule, c'est probablement un séparateur de milliers (1,2345 → 12345)
+                    $priceStr = implode('', $parts);
+                }
+            } elseif (count($parts) > 2) {
+                // Plusieurs virgules = séparateurs de milliers (1,234,567 → 1234567)
+                $priceStr = implode('', $parts);
             } else {
-                // Sinon, c'est probablement un séparateur de milliers (1,234 → 1234)
-                $priceStr = str_replace(',', '', $priceStr);
+                // Une seule partie après la virgule (probablement une virgule en fin qui a été supprimée)
+                $priceStr = $parts[0];
             }
         }
         // Cas 3: Seulement un point (format US standard: 39.00 ou 1234.56)
         // On laisse tel quel, floatval() gère correctement
 
+        Log::debug("Parsed price string to: '{$priceStr}'");
         $price = floatval($priceStr);
         
         // Validation: le prix doit être raisonnable
         if ($price > 0 && $price < 1000000) {
+            Log::debug("Final parsed price: {$price}");
             return $price;
         }
         
+        Log::warning("Price parsing failed or invalid: '{$priceStr}' → {$price}");
         return null;
     }
 
