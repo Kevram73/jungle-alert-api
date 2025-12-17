@@ -528,11 +528,21 @@ class AmazonScrapingService
 
         foreach ($patterns as $pattern) {
             if (preg_match($pattern, $html, $matches)) {
-                $priceStr = isset($matches[2]) ? $matches[1] . '.' . $matches[2] : $matches[1];
+                // Si on a whole et fraction séparés
+                if (isset($matches[2])) {
+                    // Nettoyer les deux parties (enlever virgules, points, espaces)
+                    $whole = preg_replace('/[^\d]/', '', $matches[1]);
+                    $fraction = preg_replace('/[^\d]/', '', $matches[2]);
+                    $priceStr = $whole . '.' . $fraction;
+                } else {
+                    // Sinon, utiliser la valeur telle quelle (sera nettoyée par parsePriceString)
+                    $priceStr = $matches[1];
+                }
+                
                 $price = $this->parsePriceString($priceStr);
                 
                 if ($price !== null && $price > 0 && $price < 1000000) {
-                    Log::debug("Price extracted via HTML pattern: {$price}");
+                    Log::debug("Price extracted via HTML pattern: {$price} (from: {$matches[1]})");
                     return $price;
                 }
             }
@@ -636,29 +646,57 @@ class AmazonScrapingService
 
     /**
      * Parse price string to float
+     * Gère les formats: 39.00, 39,00, 1.234,56, 1234.56, etc.
      */
     private function parsePriceString(string $priceStr): ?float
     {
-        $priceStr = preg_replace('/[^\d.,\s]/', '', $priceStr);
+        // Nettoyer la chaîne (garder seulement chiffres, virgules, points)
+        $priceStr = preg_replace('/[^\d.,]/', '', $priceStr);
         $priceStr = trim($priceStr);
+        
+        if (empty($priceStr)) {
+            return null;
+        }
 
-        // Gérer les formats européens (virgule comme séparateur décimal)
+        // Cas 1: Les deux séparateurs présents (point ET virgule)
         if (strpos($priceStr, ',') !== false && strpos($priceStr, '.') !== false) {
-            // Format: 1.234,56 → 1234.56
-            $priceStr = str_replace(['.', ','], ['', '.'], $priceStr);
-        } elseif (strpos($priceStr, ',') !== false) {
-            $parts = explode(',', $priceStr);
-            // Si la partie après la virgule fait 2 chiffres ou moins, c'est probablement des centimes
-            if (count($parts) == 2 && strlen($parts[1]) <= 2) {
+            // Déterminer lequel est le séparateur décimal
+            $lastComma = strrpos($priceStr, ',');
+            $lastDot = strrpos($priceStr, '.');
+            
+            // Le dernier séparateur est généralement le séparateur décimal
+            if ($lastComma > $lastDot) {
+                // Format: 1.234,56 → 1234.56 (point = milliers, virgule = décimal)
+                $priceStr = str_replace('.', '', $priceStr);
                 $priceStr = str_replace(',', '.', $priceStr);
             } else {
-                // Sinon, c'est probablement un séparateur de milliers
+                // Format: 1,234.56 → 1234.56 (virgule = milliers, point = décimal)
                 $priceStr = str_replace(',', '', $priceStr);
             }
         }
+        // Cas 2: Seulement une virgule
+        elseif (strpos($priceStr, ',') !== false) {
+            $parts = explode(',', $priceStr);
+            // Si on a exactement 2 parties et la partie après la virgule fait 2 chiffres ou moins
+            // C'est probablement un format européen (39,00 → 39.00)
+            if (count($parts) == 2 && strlen($parts[1]) <= 2) {
+                $priceStr = str_replace(',', '.', $priceStr);
+            } else {
+                // Sinon, c'est probablement un séparateur de milliers (1,234 → 1234)
+                $priceStr = str_replace(',', '', $priceStr);
+            }
+        }
+        // Cas 3: Seulement un point (format US standard: 39.00 ou 1234.56)
+        // On laisse tel quel, floatval() gère correctement
 
         $price = floatval($priceStr);
-        return $price > 0 ? $price : null;
+        
+        // Validation: le prix doit être raisonnable
+        if ($price > 0 && $price < 1000000) {
+            return $price;
+        }
+        
+        return null;
     }
 
     /**
