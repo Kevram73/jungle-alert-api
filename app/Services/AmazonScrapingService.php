@@ -17,102 +17,6 @@ class AmazonScrapingService
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
     ];
 
-    private function fetchProductPageWithProxy(string $url): string
-    {
-        $scraperApiKey = env('SCRAPER_API_KEY');
-        
-        if ($scraperApiKey) {
-            return $this->fetchWithScraperAPI($url, $scraperApiKey);
-        }
-        
-        return $this->fetchWithAdvancedEvasion($url);
-    }
-
-    private function fetchWithScraperAPI(string $url, string $apiKey): string
-    {
-        $scraperUrl = "http://api.scraperapi.com/";
-        
-        try {
-            $response = Http::timeout(60)->get($scraperUrl, [
-                'api_key' => $apiKey,
-                'url' => $url,
-                'render' => false,
-                'country_code' => 'us',
-            ]);
-
-            if (!$response->successful()) {
-                throw new Exception("ScraperAPI failed: " . $response->status());
-            }
-
-            return $response->body();
-        } catch (Exception $e) {
-            Log::error("ScraperAPI error: " . $e->getMessage());
-            throw $e;
-        }
-    }
-
-    private function fetchWithAdvancedEvasion(string $url): string
-    {
-        $delay = rand(5000000, 10000000);
-        usleep($delay);
-        
-        $userAgent = $this->userAgents[array_rand($this->userAgents)];
-        $marketplace = $this->extractMarketplaceFromUrl($url);
-        
-        $parsedUrl = parse_url($url);
-        $baseUrl = ($parsedUrl['scheme'] ?? 'https') . '://' . ($parsedUrl['host'] ?? 'www.amazon.com');
-        
-        $referer = 'https://www.google.com/search?q=amazon+product';
-        
-        $acceptLanguage = $this->getAcceptLanguageForMarketplace($marketplace);
-        
-        $headers = [
-            'User-Agent' => $userAgent,
-            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language' => $acceptLanguage,
-            'Accept-Encoding' => 'gzip, deflate, br',
-            'Connection' => 'keep-alive',
-            'Upgrade-Insecure-Requests' => '1',
-            'Sec-Fetch-Dest' => 'document',
-            'Sec-Fetch-Mode' => 'navigate',
-            'Sec-Fetch-Site' => 'cross-site',
-            'Sec-Fetch-User' => '?1',
-            'Cache-Control' => 'max-age=0',
-            'Referer' => $referer,
-        ];
-        
-        Log::info("🚀 Fetching with EXTREME evasion", [
-            'url' => substr($url, 0, 80),
-            'delay_seconds' => $delay / 1000000,
-        ]);
-        
-        try {
-            $response = Http::withHeaders($headers)
-                ->withOptions([
-                    'verify' => true,
-                    'timeout' => 45,
-                    'connect_timeout' => 15,
-                    'allow_redirects' => true,
-                ])
-                ->get($url);
-
-            if (!$response->successful()) {
-                throw new Exception("HTTP {$response->status()} error");
-            }
-
-            $html = $response->body();
-
-            if ($this->isCaptchaPage($html)) {
-                throw new Exception('🤖 Amazon captcha detected');
-            }
-
-            return $html;
-            
-        } catch (Exception $e) {
-            throw $e;
-        }
-    }
-
     public function scrapeProduct(string $url, bool $useCache = true): array
     {
         try {
@@ -130,6 +34,7 @@ class AmazonScrapingService
                 $cachedData = Cache::get($cacheKey);
                 
                 if ($cachedData !== null) {
+                    Log::info("💾 Cache HIT", ['url' => substr($url, 0, 100)]);
                     return [
                         'success' => true,
                         'data' => $cachedData,
@@ -146,7 +51,9 @@ class AmazonScrapingService
             $marketplace = $this->extractMarketplaceFromUrl($url);
             $country = $this->getCountryFromMarketplace($marketplace);
 
-            $html = $this->fetchProductPageWithProxy($url);
+            Log::info("🎯 Scraping", ['asin' => $asin, 'marketplace' => $marketplace]);
+
+            $html = $this->fetchProductPage($url);
 
             $productData = $this->extractAllProductData($html, $url, $asin, $marketplace, $country);
             
@@ -162,6 +69,8 @@ class AmazonScrapingService
                 $cacheKey = 'amazon_enriched_' . md5($url);
                 Cache::put($cacheKey, $productData, now()->addHours(1));
             }
+
+            Log::info("✅ Success", ['title' => substr($productData['title'], 0, 60)]);
 
             return [
                 'success' => true,
@@ -180,6 +89,61 @@ class AmazonScrapingService
                 'error' => $e->getMessage(),
                 'url' => $url,
             ];
+        }
+    }
+
+    private function fetchProductPage(string $url): string
+    {
+        $delay = rand(5000000, 10000000);
+        usleep($delay);
+        
+        $userAgent = $this->userAgents[array_rand($this->userAgents)];
+        $marketplace = $this->extractMarketplaceFromUrl($url);
+        
+        $referer = 'https://www.google.com/search?q=amazon+product';
+        $acceptLanguage = $this->getAcceptLanguageForMarketplace($marketplace);
+        
+        $headers = [
+            'User-Agent' => $userAgent,
+            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language' => $acceptLanguage,
+            'Accept-Encoding' => 'gzip, deflate, br',
+            'Connection' => 'keep-alive',
+            'Upgrade-Insecure-Requests' => '1',
+            'Sec-Fetch-Dest' => 'document',
+            'Sec-Fetch-Mode' => 'navigate',
+            'Sec-Fetch-Site' => 'cross-site',
+            'Sec-Fetch-User' => '?1',
+            'Cache-Control' => 'max-age=0',
+            'Referer' => $referer,
+        ];
+        
+        Log::info("🚀 Fetching", ['delay_sec' => round($delay / 1000000, 1)]);
+        
+        try {
+            $response = Http::withHeaders($headers)
+                ->withOptions([
+                    'verify' => true,
+                    'timeout' => 45,
+                    'connect_timeout' => 15,
+                    'allow_redirects' => true,
+                ])
+                ->get($url);
+
+            if (!$response->successful()) {
+                throw new Exception("HTTP {$response->status()} error");
+            }
+
+            $html = $response->body();
+
+            if ($this->isCaptchaPage($html)) {
+                throw new Exception('Amazon captcha detected');
+            }
+
+            return $html;
+            
+        } catch (Exception $e) {
+            throw $e;
         }
     }
 
@@ -234,6 +198,9 @@ class AmazonScrapingService
                 'amazon.co.uk' => 'https://www.amazon.co.uk',
                 'amazon.it' => 'https://www.amazon.it',
                 'amazon.es' => 'https://www.amazon.es',
+                'amazon.com.br' => 'https://www.amazon.com.br',
+                'amazon.in' => 'https://www.amazon.in',
+                'amazon.ca' => 'https://www.amazon.ca',
                 'amazon.com' => 'https://www.amazon.com',
             ];
 
@@ -254,6 +221,7 @@ class AmazonScrapingService
             '/\/gp\/product\/([A-Z0-9]{10})/',
             '/\/gp\/aw\/d\/([A-Z0-9]{10})/',
             '/\/aw\/d\/([A-Z0-9]{10})/',
+            '/\/d\/([A-Z0-9]{10})/',
         ];
 
         foreach ($patterns as $pattern) {
@@ -269,11 +237,12 @@ class AmazonScrapingService
         $host = parse_url($url, PHP_URL_HOST) ?? '';
         $host = strtolower($host);
         
-        if (str_contains($host, 'amazon.fr')) return 'FR';
-        if (str_contains($host, 'amazon.de')) return 'DE';
-        if (str_contains($host, 'amazon.co.uk')) return 'UK';
-        if (str_contains($host, 'amazon.it')) return 'IT';
-        if (str_contains($host, 'amazon.es')) return 'ES';
+        if (str_contains($host, 'amazon.fr') || str_contains($host, 'amzn.fr')) return 'FR';
+        if (str_contains($host, 'amazon.de') || str_contains($host, 'amzn.de')) return 'DE';
+        if (str_contains($host, 'amazon.co.uk') || str_contains($host, 'amzn.co.uk')) return 'UK';
+        if (str_contains($host, 'amazon.it') || str_contains($host, 'amzn.it')) return 'IT';
+        if (str_contains($host, 'amazon.es') || str_contains($host, 'amzn.es')) return 'ES';
+        if (str_contains($host, 'amzn.eu')) return 'EU';
         
         return 'US';
     }
@@ -286,6 +255,7 @@ class AmazonScrapingService
             'UK' => 'United Kingdom',
             'IT' => 'Italy',
             'ES' => 'Spain',
+            'EU' => 'Europe',
             default => 'United States',
         };
     }
@@ -293,7 +263,7 @@ class AmazonScrapingService
     private function getCurrencyFromMarketplace(string $marketplace): string
     {
         return match ($marketplace) {
-            'FR', 'DE', 'IT', 'ES' => 'EUR',
+            'FR', 'DE', 'IT', 'ES', 'EU' => 'EUR',
             'UK' => 'GBP',
             default => 'USD',
         };
@@ -307,23 +277,36 @@ class AmazonScrapingService
             'UK' => 'en-GB,en;q=0.9',
             'IT' => 'it-IT,it;q=0.9,en;q=0.8',
             'ES' => 'es-ES,es;q=0.9,en;q=0.8',
+            'EU' => 'en-GB,en;q=0.9,de;q=0.8,fr;q=0.7',
             default => 'en-US,en;q=0.9',
         };
     }
 
     private function isShortUrl(string $url): bool
     {
-        return str_contains($url, 'amzn.to') || str_contains($url, 'a.co');
+        return str_contains($url, 'amzn.to') || 
+               str_contains($url, 'amzn.eu') || 
+               str_contains($url, 'a.co');
     }
 
     private function resolveShortUrl(string $shortUrl): ?string
     {
         try {
-            $response = Http::timeout(10)->get($shortUrl);
-            return $response->effectiveUri();
+            $userAgent = $this->userAgents[array_rand($this->userAgents)];
+            
+            $response = Http::withHeaders([
+                'User-Agent' => $userAgent,
+                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language' => 'en-US,en;q=0.9',
+            ])->timeout(10)->get($shortUrl);
+
+            if ($response->successful()) {
+                return $response->effectiveUri();
+            }
         } catch (Exception $e) {
-            return null;
+            Log::warning('Short URL resolution failed: ' . $e->getMessage());
         }
+        return null;
     }
 
     private function isCaptchaPage(string $html): bool
@@ -422,7 +405,7 @@ class AmazonScrapingService
     {
         $priceString = preg_replace('/\s+/', '', $priceString);
         
-        if (in_array($marketplace, ['FR', 'DE', 'IT', 'ES'])) {
+        if (in_array($marketplace, ['FR', 'DE', 'IT', 'ES', 'EU'])) {
             $priceString = str_replace('.', '', $priceString);
             $priceString = str_replace(',', '.', $priceString);
         } else {
@@ -704,7 +687,10 @@ class AmazonScrapingService
     {
         $amazonDomains = [
             'amazon.com', 'amazon.de', 'amazon.co.uk', 'amazon.fr',
-            'amazon.it', 'amazon.es', 'a.co', 'amzn.to',
+            'amazon.it', 'amazon.es', 'amazon.com.br', 'amazon.in',
+            'amazon.ca', 'a.co', 'amzn.to', 'amzn.eu', 'amzn.com',
+            'amzn.co.uk', 'amzn.de', 'amzn.fr', 'amzn.it', 'amzn.es',
+            'amzn.com.br', 'amzn.in', 'amzn.ca',
         ];
 
         $host = strtolower(parse_url($url, PHP_URL_HOST) ?? '');
