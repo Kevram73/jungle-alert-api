@@ -25,9 +25,11 @@ use Exception;
 class AmazonScrapingService
 {
     private array $userAgents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
     ];
 
     /**
@@ -1082,25 +1084,60 @@ class AmazonScrapingService
      */
     private function fetchProductPage(string $url): string
     {
+        // Délai aléatoire pour éviter la détection (1-3 secondes)
+        $delay = rand(1000000, 3000000);
+        usleep($delay);
+        
         $userAgent = $this->userAgents[array_rand($this->userAgents)];
         
-        $response = Http::withHeaders([
+        // Extraire le domaine Amazon pour le Referer
+        $parsedUrl = parse_url($url);
+        $baseUrl = ($parsedUrl['scheme'] ?? 'https') . '://' . ($parsedUrl['host'] ?? 'www.amazon.com');
+        $referer = $baseUrl . '/';
+        
+        // Headers plus réalistes pour éviter la détection
+        $headers = [
             'User-Agent' => $userAgent,
-            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language' => 'en-US,en;q=0.5',
-            'Accept-Encoding' => 'gzip, deflate, br',
+            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language' => 'en-US,en;q=0.9',
+            'Accept-Encoding' => 'gzip, deflate, br, zstd',
             'DNT' => '1',
             'Connection' => 'keep-alive',
             'Upgrade-Insecure-Requests' => '1',
-        ])->timeout(30)->get($url);
+            'Sec-Fetch-Dest' => 'document',
+            'Sec-Fetch-Mode' => 'navigate',
+            'Sec-Fetch-Site' => 'none',
+            'Sec-Fetch-User' => '?1',
+            'sec-ch-ua' => '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+            'sec-ch-ua-mobile' => '?0',
+            'sec-ch-ua-platform' => '"Windows"',
+            'Cache-Control' => 'max-age=0',
+            'Referer' => $referer,
+        ];
+        
+        Log::debug("Fetching URL with headers", ['url' => $url, 'user-agent' => $userAgent]);
+        
+        $response = Http::withHeaders($headers)
+            ->withOptions([
+                'verify' => true,
+                'timeout' => 30,
+                'allow_redirects' => true,
+            ])
+            ->get($url);
 
         if (!$response->successful()) {
+            Log::warning("HTTP request failed", [
+                'status' => $response->status(),
+                'url' => $url,
+                'body_preview' => substr($response->body(), 0, 500)
+            ]);
             throw new Exception("HTTP request failed with status: {$response->status()}");
         }
 
         $html = $response->body();
 
         if ($this->isCaptchaPage($html)) {
+            Log::warning("Captcha detected", ['url' => $url]);
             throw new Exception('Amazon detected automated request (captcha). Please try again later.');
         }
 
@@ -1112,11 +1149,34 @@ class AmazonScrapingService
      */
     private function isCaptchaPage(string $html): bool
     {
-        $indicators = ['captcha', 'robot check', 'Type the characters you see'];
+        $indicators = [
+            'captcha',
+            'robot check',
+            'Type the characters you see',
+            'Sorry, we just need to make sure you\'re not a robot',
+            'Enter the characters you see',
+            'automated access',
+            'unusual traffic',
+            'verify you\'re human',
+            'amazon.com/captcha',
+            'id="captchacharacters"',
+            'name="captchacharacters"',
+        ];
+        
         $htmlLower = strtolower($html);
         
         foreach ($indicators as $indicator) {
             if (str_contains($htmlLower, strtolower($indicator))) {
+                Log::warning("Captcha indicator found", ['indicator' => $indicator]);
+                return true;
+            }
+        }
+        
+        // Vérifier aussi si le titre de la page contient "captcha" ou "robot"
+        if (preg_match('/<title[^>]*>(.*?)<\/title>/is', $html, $matches)) {
+            $title = strtolower($matches[1]);
+            if (str_contains($title, 'captcha') || str_contains($title, 'robot')) {
+                Log::warning("Captcha detected in page title", ['title' => $matches[1]]);
                 return true;
             }
         }
@@ -1241,8 +1301,20 @@ class AmazonScrapingService
     public function resolveShortUrl(string $shortUrl): ?string
     {
         try {
+            $userAgent = $this->userAgents[array_rand($this->userAgents)];
+            
             $response = Http::withHeaders([
-                'User-Agent' => $this->userAgents[0],
+                'User-Agent' => $userAgent,
+                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language' => 'en-US,en;q=0.9',
+                'Accept-Encoding' => 'gzip, deflate, br',
+                'DNT' => '1',
+                'Connection' => 'keep-alive',
+                'Upgrade-Insecure-Requests' => '1',
+                'Sec-Fetch-Dest' => 'document',
+                'Sec-Fetch-Mode' => 'navigate',
+                'Sec-Fetch-Site' => 'none',
+                'Sec-Fetch-User' => '?1',
             ])->timeout(10)->get($shortUrl);
 
             if ($response->successful()) {
@@ -1285,20 +1357,32 @@ class AmazonScrapingService
     public function scrapeProductWithRetry(string $url, int $maxRetries = 3): array
     {
         for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            Log::info("Scraping attempt {$attempt}/{$maxRetries}", ['url' => $url]);
+            
             $result = $this->scrapeProduct($url, $attempt === 1);
             
             if ($result['success']) {
                 return $result;
             }
             
-            if ($attempt < $maxRetries) {
-                usleep(pow(2, $attempt) * 1000000);
+            // Si c'est un captcha, attendre plus longtemps avant de réessayer
+            if (isset($result['error']) && str_contains($result['error'], 'captcha')) {
+                $waitTime = pow(2, $attempt) * 2000000; // 2, 4, 8 secondes
+                Log::warning("Captcha detected, waiting {$waitTime} microseconds before retry");
+                if ($attempt < $maxRetries) {
+                    usleep($waitTime);
+                }
+            } elseif ($attempt < $maxRetries) {
+                // Délai exponentiel avec jitter aléatoire
+                $waitTime = pow(2, $attempt) * 1000000 + rand(500000, 1500000);
+                usleep($waitTime);
             }
         }
         
         return [
             'success' => false,
-            'error' => 'Failed after ' . $maxRetries . ' attempts',
+            'error' => 'Failed after ' . $maxRetries . ' attempts: ' . ($result['error'] ?? 'Unknown error'),
+            'url' => $url,
         ];
     }
 }
