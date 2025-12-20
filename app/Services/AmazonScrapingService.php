@@ -39,6 +39,9 @@ class AmazonScrapingService
     public function scrapeProduct(string $url, bool $useCache = true): array
     {
         try {
+            // Délai initial aléatoire pour éviter la détection (0.5-1.5 secondes)
+            usleep(rand(500000, 1500000));
+            
             // 🔄 ÉTAPE 1: Normaliser l'URL (mobile → desktop)
             $url = $this->normalizeAmazonUrl($url);
             Log::info("Normalized URL: {$url}");
@@ -103,10 +106,10 @@ class AmazonScrapingService
                 throw new Exception('Scraped data is incomplete or invalid');
             }
 
-            // Cache result
+            // Cache result (augmenter la durée du cache pour éviter les requêtes répétées)
             if ($useCache) {
                 $cacheKey = 'amazon_enriched_' . md5($url);
-                Cache::put($cacheKey, $productData, now()->addMinutes(5));
+                Cache::put($cacheKey, $productData, now()->addMinutes(15)); // 15 minutes au lieu de 5
             }
 
             Log::info("Successfully scraped: {$productData['title']}");

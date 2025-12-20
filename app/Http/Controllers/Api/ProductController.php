@@ -188,7 +188,7 @@ class ProductController extends Controller
         // Scraper les données du produit si demandé ou si pas de données manuelles
         $scrapeData = $request->get('scrape_data', true);
         if ($scrapeData) {
-            $scrapedData = $this->scrapingService->scrapeProduct($request->amazon_url);
+            $scrapedData = $this->scrapingService->scrapeProductWithRetry($request->amazon_url);
             
             if ($scrapedData['success']) {
                 $data = $scrapedData['data'];
@@ -536,12 +536,12 @@ class ProductController extends Controller
             return response()->json(['message' => 'Product not found'], 404);
         }
 
-        $scrapedData = $this->scrapingService->scrapeProduct($product->amazon_url);
+        $scrapedData = $this->scrapingService->scrapeProductWithRetry($product->amazon_url);
         
         if (!$scrapedData['success']) {
             return response()->json([
                 'message' => 'Failed to scrape product data',
-                'error' => $scrapedData['error']
+                'error' => $scrapedData['error'] ?? 'Unknown error'
             ], 400);
         }
 
@@ -622,12 +622,17 @@ class ProductController extends Controller
             ], 422);
         }
 
-        $scrapedData = $this->scrapingService->scrapeProduct($request->amazon_url);
+        $scrapedData = $this->scrapingService->scrapeProductWithRetry($request->amazon_url);
         
         if (!$scrapedData['success']) {
             return response()->json([
+                'success' => false,
                 'message' => 'Failed to scrape product data',
-                'error' => $scrapedData['error']
+                'error' => $scrapedData['error'] ?? 'Unknown error',
+                'data' => [
+                    'message' => 'Failed to scrape product data',
+                    'error' => $scrapedData['error'] ?? 'Unknown error'
+                ]
             ], 400);
         }
 
@@ -658,9 +663,10 @@ class ProductController extends Controller
         ];
 
         return response()->json([
+            'success' => true,
             'message' => 'Product data scraped successfully',
             'data' => $enriched,
-        ]);
+        ], 200);
     }
 
     /**
@@ -676,7 +682,10 @@ class ProductController extends Controller
 
         foreach ($products as $product) {
             try {
-                $scrapedData = $this->scrapingService->scrapeProduct($product->amazon_url);
+                // Délai entre chaque produit pour éviter la détection
+                usleep(rand(2000000, 4000000)); // 2-4 secondes
+                
+                $scrapedData = $this->scrapingService->scrapeProductWithRetry($product->amazon_url);
                 
                 if ($scrapedData['success'] && isset($scrapedData['data']['price'])) {
                     $newPrice = $scrapedData['data']['price'];
