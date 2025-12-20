@@ -17,82 +17,41 @@ class AmazonScrapingService
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
     ];
 
-    public function scrapeProduct(string $url, bool $useCache = true): array
+    private function fetchProductPageWithProxy(string $url): string
     {
+        $scraperApiKey = env('SCRAPER_API_KEY');
+        
+        if ($scraperApiKey) {
+            return $this->fetchWithScraperAPI($url, $scraperApiKey);
+        }
+        
+        return $this->fetchWithAdvancedEvasion($url);
+    }
+
+    private function fetchWithScraperAPI(string $url, string $apiKey): string
+    {
+        $scraperUrl = "http://api.scraperapi.com/";
+        
         try {
-            $url = $this->normalizeAmazonUrl($url);
-            
-            if ($this->isShortUrl($url)) {
-                $resolvedUrl = $this->resolveShortUrl($url);
-                if ($resolvedUrl) {
-                    $url = $this->normalizeAmazonUrl($resolvedUrl);
-                }
-            }
-
-            if ($useCache) {
-                $cacheKey = 'amazon_enriched_' . md5($url);
-                $cachedData = Cache::get($cacheKey);
-                
-                if ($cachedData !== null) {
-                    Log::info("💾 Cache HIT", ['url' => substr($url, 0, 100)]);
-                    return [
-                        'success' => true,
-                        'data' => $cachedData,
-                        'cached' => true,
-                    ];
-                }
-            }
-
-            $asin = $this->extractAsinFromUrl($url);
-            if (!$asin) {
-                throw new Exception('Could not extract ASIN from URL');
-            }
-
-            $marketplace = $this->extractMarketplaceFromUrl($url);
-            $country = $this->getCountryFromMarketplace($marketplace);
-
-            Log::info("🎯 Scraping", ['asin' => $asin, 'marketplace' => $marketplace]);
-
-            $html = $this->fetchProductPage($url);
-
-            $productData = $this->extractAllProductData($html, $url, $asin, $marketplace, $country);
-            
-            if (empty($productData['image_url']) && !empty($productData['images'])) {
-                $productData['image_url'] = $productData['images'][0];
-            }
-
-            if (!$this->isValidProductData($productData)) {
-                throw new Exception('Scraped data is incomplete or invalid');
-            }
-
-            if ($useCache) {
-                $cacheKey = 'amazon_enriched_' . md5($url);
-                Cache::put($cacheKey, $productData, now()->addHours(1));
-            }
-
-            Log::info("✅ Success", ['title' => substr($productData['title'], 0, 60)]);
-
-            return [
-                'success' => true,
-                'data' => $productData,
-                'cached' => false,
-            ];
-
-        } catch (Exception $e) {
-            Log::error('❌ Scraping error', [
-                'message' => $e->getMessage(),
-                'url' => substr($url, 0, 100),
-            ]);
-            
-            return [
-                'success' => false,
-                'error' => $e->getMessage(),
+            $response = Http::timeout(60)->get($scraperUrl, [
+                'api_key' => $apiKey,
                 'url' => $url,
-            ];
+                'render' => false,
+                'country_code' => 'us',
+            ]);
+
+            if (!$response->successful()) {
+                throw new Exception("ScraperAPI failed: " . $response->status());
+            }
+
+            return $response->body();
+        } catch (Exception $e) {
+            Log::error("ScraperAPI error: " . $e->getMessage());
+            throw $e;
         }
     }
 
-    private function fetchProductPage(string $url): string
+    private function fetchWithAdvancedEvasion(string $url): string
     {
         $delay = rand(5000000, 10000000);
         usleep($delay);
@@ -100,7 +59,11 @@ class AmazonScrapingService
         $userAgent = $this->userAgents[array_rand($this->userAgents)];
         $marketplace = $this->extractMarketplaceFromUrl($url);
         
+        $parsedUrl = parse_url($url);
+        $baseUrl = ($parsedUrl['scheme'] ?? 'https') . '://' . ($parsedUrl['host'] ?? 'www.amazon.com');
+        
         $referer = 'https://www.google.com/search?q=amazon+product';
+        
         $acceptLanguage = $this->getAcceptLanguageForMarketplace($marketplace);
         
         $headers = [
@@ -118,7 +81,10 @@ class AmazonScrapingService
             'Referer' => $referer,
         ];
         
-        Log::info("🚀 Fetching", ['delay_sec' => round($delay / 1000000, 1)]);
+        Log::info("🚀 Fetching with EXTREME evasion", [
+            'url' => substr($url, 0, 80),
+            'delay_seconds' => $delay / 1000000,
+        ]);
         
         try {
             $response = Http::withHeaders($headers)
@@ -137,13 +103,83 @@ class AmazonScrapingService
             $html = $response->body();
 
             if ($this->isCaptchaPage($html)) {
-                throw new Exception('Amazon captcha detected');
+                throw new Exception('🤖 Amazon captcha detected');
             }
 
             return $html;
             
         } catch (Exception $e) {
             throw $e;
+        }
+    }
+
+    public function scrapeProduct(string $url, bool $useCache = true): array
+    {
+        try {
+            $url = $this->normalizeAmazonUrl($url);
+            
+            if ($this->isShortUrl($url)) {
+                $resolvedUrl = $this->resolveShortUrl($url);
+                if ($resolvedUrl) {
+                    $url = $this->normalizeAmazonUrl($resolvedUrl);
+                }
+            }
+
+            if ($useCache) {
+                $cacheKey = 'amazon_enriched_' . md5($url);
+                $cachedData = Cache::get($cacheKey);
+                
+                if ($cachedData !== null) {
+                    return [
+                        'success' => true,
+                        'data' => $cachedData,
+                        'cached' => true,
+                    ];
+                }
+            }
+
+            $asin = $this->extractAsinFromUrl($url);
+            if (!$asin) {
+                throw new Exception('Could not extract ASIN from URL');
+            }
+
+            $marketplace = $this->extractMarketplaceFromUrl($url);
+            $country = $this->getCountryFromMarketplace($marketplace);
+
+            $html = $this->fetchProductPageWithProxy($url);
+
+            $productData = $this->extractAllProductData($html, $url, $asin, $marketplace, $country);
+            
+            if (empty($productData['image_url']) && !empty($productData['images'])) {
+                $productData['image_url'] = $productData['images'][0];
+            }
+
+            if (!$this->isValidProductData($productData)) {
+                throw new Exception('Scraped data is incomplete or invalid');
+            }
+
+            if ($useCache) {
+                $cacheKey = 'amazon_enriched_' . md5($url);
+                Cache::put($cacheKey, $productData, now()->addHours(1));
+            }
+
+            return [
+                'success' => true,
+                'data' => $productData,
+                'cached' => false,
+            ];
+
+        } catch (Exception $e) {
+            Log::error('❌ Scraping error', [
+                'message' => $e->getMessage(),
+                'url' => substr($url, 0, 100),
+            ]);
+            
+            return [
+                'success' => false,
+                'error' => $e->getMessage(),
+                'url' => $url,
+            ];
         }
     }
 
