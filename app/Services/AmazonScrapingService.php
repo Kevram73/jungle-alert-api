@@ -7,98 +7,137 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 use Exception;
 
-/**
- * Service de scraping Amazon ENRICHI avec support MOBILE
- * Convertit automatiquement les liens mobiles en liens desktop pour avoir plus de données
- * 
- * Extrait TOUTES les informations produit :
- * - Nom complet du produit
- * - Marketplace (pays)
- * - ASIN
- * - Nombre d'étoiles (rating) ⭐
- * - Nombre d'avis (reviews) 💬
- * - Nombre en stock 📦
- * - Statut de disponibilité
- * - Catégories complètes 🏷️
- * - Prix, images, description, etc.
- */
 class AmazonScrapingService
 {
-    // 🔥 User-Agents ultra-réalistes et variés (2024-2025)
     private array $userAgents = [
-        // Chrome Windows (les plus courants)
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
-        
-        // Chrome macOS
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-        
-        // Firefox Windows
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0',
-        
-        // Firefox macOS
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0',
-        
-        // Safari macOS (très important pour Amazon)
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15',
-        
-        // Edge Windows (basé sur Chromium)
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
     ];
-    
-    // 🍪 Cookies simulés pour paraître plus naturel
-    private array $cookieJar = [];
 
-    /**
-     * Scrape product with ALL enriched data
-     * Supporte les liens web ET mobile
-     */
+    private function fetchProductPageWithProxy(string $url): string
+    {
+        $scraperApiKey = env('SCRAPER_API_KEY');
+        
+        if ($scraperApiKey) {
+            return $this->fetchWithScraperAPI($url, $scraperApiKey);
+        }
+        
+        return $this->fetchWithAdvancedEvasion($url);
+    }
+
+    private function fetchWithScraperAPI(string $url, string $apiKey): string
+    {
+        $scraperUrl = "http://api.scraperapi.com/";
+        
+        try {
+            $response = Http::timeout(60)->get($scraperUrl, [
+                'api_key' => $apiKey,
+                'url' => $url,
+                'render' => false,
+                'country_code' => 'us',
+            ]);
+
+            if (!$response->successful()) {
+                throw new Exception("ScraperAPI failed: " . $response->status());
+            }
+
+            return $response->body();
+        } catch (Exception $e) {
+            Log::error("ScraperAPI error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    private function fetchWithAdvancedEvasion(string $url): string
+    {
+        $delay = rand(5000000, 10000000);
+        usleep($delay);
+        
+        $userAgent = $this->userAgents[array_rand($this->userAgents)];
+        $marketplace = $this->extractMarketplaceFromUrl($url);
+        
+        $parsedUrl = parse_url($url);
+        $baseUrl = ($parsedUrl['scheme'] ?? 'https') . '://' . ($parsedUrl['host'] ?? 'www.amazon.com');
+        
+        $referer = 'https://www.google.com/search?q=amazon+product';
+        
+        $acceptLanguage = $this->getAcceptLanguageForMarketplace($marketplace);
+        
+        $headers = [
+            'User-Agent' => $userAgent,
+            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language' => $acceptLanguage,
+            'Accept-Encoding' => 'gzip, deflate, br',
+            'Connection' => 'keep-alive',
+            'Upgrade-Insecure-Requests' => '1',
+            'Sec-Fetch-Dest' => 'document',
+            'Sec-Fetch-Mode' => 'navigate',
+            'Sec-Fetch-Site' => 'cross-site',
+            'Sec-Fetch-User' => '?1',
+            'Cache-Control' => 'max-age=0',
+            'Referer' => $referer,
+        ];
+        
+        Log::info("🚀 Fetching with EXTREME evasion", [
+            'url' => substr($url, 0, 80),
+            'delay_seconds' => $delay / 1000000,
+        ]);
+        
+        try {
+            $response = Http::withHeaders($headers)
+                ->withOptions([
+                    'verify' => true,
+                    'timeout' => 45,
+                    'connect_timeout' => 15,
+                    'allow_redirects' => true,
+                ])
+                ->get($url);
+
+            if (!$response->successful()) {
+                throw new Exception("HTTP {$response->status()} error");
+            }
+
+            $html = $response->body();
+
+            if ($this->isCaptchaPage($html)) {
+                throw new Exception('🤖 Amazon captcha detected');
+            }
+
+            return $html;
+            
+        } catch (Exception $e) {
+            throw $e;
+        }
+    }
+
     public function scrapeProduct(string $url, bool $useCache = true): array
     {
         try {
-            // 🎲 Délai initial ALÉATOIRE et INTELLIGENT pour éviter la détection
-            // Varie entre 0.5s et 2.5s pour paraître plus humain
-            $initialDelay = rand(500000, 2500000);
-            usleep($initialDelay);
-            
-            // 🔄 ÉTAPE 1: Normaliser l'URL (mobile → desktop)
             $url = $this->normalizeAmazonUrl($url);
-            Log::info("📋 Normalized URL", ['url' => substr($url, 0, 100) . '...']);
-
-            // Resolve short URLs
+            
             if ($this->isShortUrl($url)) {
                 $resolvedUrl = $this->resolveShortUrl($url);
                 if ($resolvedUrl) {
                     $url = $this->normalizeAmazonUrl($resolvedUrl);
-                    Log::info("🔗 Short URL resolved", ['url' => substr($url, 0, 100) . '...']);
                 }
             }
 
-            // Check cache with longer TTL
             if ($useCache) {
                 $cacheKey = 'amazon_enriched_' . md5($url);
                 $cachedData = Cache::get($cacheKey);
                 
                 if ($cachedData !== null) {
-                    Log::info("💾 Cache HIT", [
-                        'url' => substr($url, 0, 100),
-                        'title' => $cachedData['title'] ?? 'N/A',
-                    ]);
                     return [
                         'success' => true,
                         'data' => $cachedData,
                         'cached' => true,
                     ];
                 }
-                Log::debug("💾 Cache MISS", ['url' => substr($url, 0, 100)]);
             }
 
-            // Extract ASIN and marketplace
             $asin = $this->extractAsinFromUrl($url);
             if (!$asin) {
                 throw new Exception('Could not extract ASIN from URL');
@@ -107,58 +146,22 @@ class AmazonScrapingService
             $marketplace = $this->extractMarketplaceFromUrl($url);
             $country = $this->getCountryFromMarketplace($marketplace);
 
-            Log::info("🎯 Scraping target", [
-                'asin' => $asin,
-                'marketplace' => $marketplace,
-                'country' => $country,
-            ]);
+            $html = $this->fetchProductPageWithProxy($url);
 
-            // Fetch HTML
-            $html = $this->fetchProductPage($url);
-
-            // Extract ALL data
             $productData = $this->extractAllProductData($html, $url, $asin, $marketplace, $country);
             
-            // Fallback: Si l'image principale n'est pas trouvée, utiliser la première image de la liste
             if (empty($productData['image_url']) && !empty($productData['images'])) {
                 $productData['image_url'] = $productData['images'][0];
-                Log::info("🖼️ Using first image from images array as main image");
-            }
-            
-            // Logging pour déboguer les problèmes d'extraction
-            if (empty($productData['price']) && empty($productData['current_price'])) {
-                Log::warning("💰 Price extraction failed", [
-                    'asin' => $asin,
-                    'marketplace' => $marketplace,
-                ]);
-            }
-            if (empty($productData['image_url'])) {
-                Log::warning("🖼️ Image extraction failed", [
-                    'asin' => $asin,
-                    'marketplace' => $marketplace,
-                ]);
             }
 
-            // Validate
             if (!$this->isValidProductData($productData)) {
                 throw new Exception('Scraped data is incomplete or invalid');
             }
 
-            // 💾 Cache result avec TTL PLUS LONG pour réduire la fréquence des requêtes
-            // 30 minutes au lieu de 15, encore mieux pour éviter les blocages
             if ($useCache) {
                 $cacheKey = 'amazon_enriched_' . md5($url);
-                $cacheDuration = now()->addMinutes(30);
-                Cache::put($cacheKey, $productData, $cacheDuration);
-                Log::debug("💾 Cached for 30 minutes", [
-                    'key' => substr($cacheKey, 0, 20) . '...',
-                ]);
+                Cache::put($cacheKey, $productData, now()->addHours(1));
             }
-
-            Log::info("✅ Successfully scraped", [
-                'title' => substr($productData['title'], 0, 60) . '...',
-                'price' => $productData['current_price'] ?? 'N/A',
-            ]);
 
             return [
                 'success' => true,
@@ -170,8 +173,6 @@ class AmazonScrapingService
             Log::error('❌ Scraping error', [
                 'message' => $e->getMessage(),
                 'url' => substr($url, 0, 100),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
             ]);
             
             return [
@@ -182,69 +183,69 @@ class AmazonScrapingService
         }
     }
 
-    /**
-     * Normaliser les URLs Amazon
-     * Convertit les liens mobiles en liens desktop pour avoir plus de données
-     */
+    public function scrapeProductWithRetry(string $url, int $maxRetries = 2): array
+    {
+        $lastError = null;
+        
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            Log::info("🔄 Attempt {$attempt}/{$maxRetries}");
+            
+            $result = $this->scrapeProduct($url, $attempt === 1);
+            
+            if ($result['success']) {
+                return $result;
+            }
+            
+            $lastError = $result['error'] ?? 'Unknown error';
+            
+            if ($attempt < $maxRetries) {
+                $waitSeconds = 30 + rand(0, 30);
+                Log::warning("⏳ Waiting {$waitSeconds}s before retry");
+                sleep($waitSeconds);
+            }
+        }
+        
+        return [
+            'success' => false,
+            'error' => "Failed after {$maxRetries} attempts: {$lastError}",
+            'url' => $url,
+        ];
+    }
+
     private function normalizeAmazonUrl(string $url): string
     {
         $asin = $this->extractAsinFromUrl($url);
         if (!$asin) {
             return $url;
         }
-
         $baseUrl = $this->getAmazonBaseUrl($url);
-        $canonicalUrl = "{$baseUrl}/dp/{$asin}";
-
-        Log::debug("URL normalized: {$url} → {$canonicalUrl}");
-        return $canonicalUrl;
+        return "{$baseUrl}/dp/{$asin}";
     }
 
-    /**
-     * Get Amazon base URL from marketplace or URL
-     */
     private function getAmazonBaseUrl(?string $url = null): string
     {
         if ($url) {
             $host = parse_url($url, PHP_URL_HOST) ?? '';
-            $host = strtolower($host);
-            $host = str_replace('m.amazon', 'www.amazon', $host);
+            $host = strtolower(str_replace('m.amazon', 'www.amazon', $host));
             
-            $domainMap = [
-                'amzn.com.br' => 'https://www.amazon.com.br',
-                'amzn.co.uk' => 'https://www.amazon.co.uk',
-                'amzn.de' => 'https://www.amazon.de',
-                'amzn.fr' => 'https://www.amazon.fr',
-                'amzn.it' => 'https://www.amazon.it',
-                'amzn.es' => 'https://www.amazon.es',
-                'amzn.in' => 'https://www.amazon.in',
-                'amzn.ca' => 'https://www.amazon.ca',
-                'amzn.eu' => 'https://www.amazon.eu',
-                'amazon.com.br' => 'https://www.amazon.com.br',
-                'amazon.co.uk' => 'https://www.amazon.co.uk',
-                'amazon.de' => 'https://www.amazon.de',
+            $domains = [
                 'amazon.fr' => 'https://www.amazon.fr',
+                'amazon.de' => 'https://www.amazon.de',
+                'amazon.co.uk' => 'https://www.amazon.co.uk',
                 'amazon.it' => 'https://www.amazon.it',
                 'amazon.es' => 'https://www.amazon.es',
-                'amazon.in' => 'https://www.amazon.in',
-                'amazon.ca' => 'https://www.amazon.ca',
-                'amazon.eu' => 'https://www.amazon.eu',
                 'amazon.com' => 'https://www.amazon.com',
             ];
 
-            foreach ($domainMap as $domain => $baseUrl) {
+            foreach ($domains as $domain => $base) {
                 if (str_contains($host, $domain)) {
-                    return $baseUrl;
+                    return $base;
                 }
             }
         }
-        
         return 'https://www.amazon.com';
     }
 
-    /**
-     * Extract ASIN from URL (supporte mobile et desktop)
-     */
     private function extractAsinFromUrl(string $url): ?string
     {
         $patterns = [
@@ -253,7 +254,6 @@ class AmazonScrapingService
             '/\/gp\/product\/([A-Z0-9]{10})/',
             '/\/gp\/aw\/d\/([A-Z0-9]{10})/',
             '/\/aw\/d\/([A-Z0-9]{10})/',
-            '/\/[^\/]*\/([A-Z0-9]{10})/',
         ];
 
         foreach ($patterns as $pattern) {
@@ -261,13 +261,89 @@ class AmazonScrapingService
                 return $matches[1];
             }
         }
-
         return null;
     }
 
-    /**
-     * Extract ALL product data from HTML
-     */
+    private function extractMarketplaceFromUrl(string $url): string
+    {
+        $host = parse_url($url, PHP_URL_HOST) ?? '';
+        $host = strtolower($host);
+        
+        if (str_contains($host, 'amazon.fr')) return 'FR';
+        if (str_contains($host, 'amazon.de')) return 'DE';
+        if (str_contains($host, 'amazon.co.uk')) return 'UK';
+        if (str_contains($host, 'amazon.it')) return 'IT';
+        if (str_contains($host, 'amazon.es')) return 'ES';
+        
+        return 'US';
+    }
+
+    private function getCountryFromMarketplace(string $marketplace): string
+    {
+        return match ($marketplace) {
+            'FR' => 'France',
+            'DE' => 'Germany',
+            'UK' => 'United Kingdom',
+            'IT' => 'Italy',
+            'ES' => 'Spain',
+            default => 'United States',
+        };
+    }
+
+    private function getCurrencyFromMarketplace(string $marketplace): string
+    {
+        return match ($marketplace) {
+            'FR', 'DE', 'IT', 'ES' => 'EUR',
+            'UK' => 'GBP',
+            default => 'USD',
+        };
+    }
+
+    private function getAcceptLanguageForMarketplace(string $marketplace): string
+    {
+        return match ($marketplace) {
+            'FR' => 'fr-FR,fr;q=0.9,en;q=0.8',
+            'DE' => 'de-DE,de;q=0.9,en;q=0.8',
+            'UK' => 'en-GB,en;q=0.9',
+            'IT' => 'it-IT,it;q=0.9,en;q=0.8',
+            'ES' => 'es-ES,es;q=0.9,en;q=0.8',
+            default => 'en-US,en;q=0.9',
+        };
+    }
+
+    private function isShortUrl(string $url): bool
+    {
+        return str_contains($url, 'amzn.to') || str_contains($url, 'a.co');
+    }
+
+    private function resolveShortUrl(string $shortUrl): ?string
+    {
+        try {
+            $response = Http::timeout(10)->get($shortUrl);
+            return $response->effectiveUri();
+        } catch (Exception $e) {
+            return null;
+        }
+    }
+
+    private function isCaptchaPage(string $html): bool
+    {
+        $indicators = ['captcha', 'robot check', 'automated access', 'unusual traffic'];
+        $htmlLower = strtolower($html);
+        
+        foreach ($indicators as $indicator) {
+            if (str_contains($htmlLower, $indicator)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function isValidProductData(array $data): bool
+    {
+        return !empty($data['title']) && !empty($data['asin']);
+    }
+
     private function extractAllProductData(string $html, string $url, string $asin, string $marketplace, string $country): array
     {
         return [
@@ -300,16 +376,12 @@ class AmazonScrapingService
         ];
     }
 
-    /**
-     * Extract product title
-     */
     private function extractTitle(string $html): ?string
     {
         $patterns = [
             '/<span[^>]*id="productTitle"[^>]*>(.*?)<\/span>/is',
             '/<h1[^>]*id="title"[^>]*>(.*?)<\/h1>/is',
             '/<title[^>]*>(.*?)\s*:\s*Amazon\./is',
-            '/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/i',
         ];
 
         foreach ($patterns as $pattern) {
@@ -320,24 +392,17 @@ class AmazonScrapingService
                 }
             }
         }
-
         return null;
     }
 
-    /**
-     * Extract current price
-     */
     private function extractPrice(string $html, string $url): ?float
     {
         $marketplace = $this->extractMarketplaceFromUrl($url);
-        $symbols = $this->getCurrencySymbolsForMarketplace($marketplace);
         
         $patterns = [
             '/<span[^>]*class="[^"]*a-price-whole[^"]*"[^>]*>([\d\s.,]+)<\/span>/i',
             '/<span[^>]*class="[^"]*a-offscreen[^"]*"[^>]*>.*?([\d\s.,]+).*?<\/span>/i',
             '/<span[^>]*id="priceblock_ourprice"[^>]*>([\d\s.,]+)<\/span>/i',
-            '/<span[^>]*id="priceblock_dealprice"[^>]*>([\d\s.,]+)<\/span>/i',
-            '/<span[^>]*class="[^"]*apexPriceToPay[^"]*"[^>]*>.*?([\d\s.,]+).*?<\/span>/is',
         ];
 
         foreach ($patterns as $pattern) {
@@ -350,18 +415,14 @@ class AmazonScrapingService
                 }
             }
         }
-
         return null;
     }
 
-    /**
-     * Parse price string to float
-     */
     private function parsePrice(string $priceString, string $marketplace): float
     {
         $priceString = preg_replace('/\s+/', '', $priceString);
         
-        if (in_array($marketplace, ['FR', 'DE', 'IT', 'ES', 'EU'])) {
+        if (in_array($marketplace, ['FR', 'DE', 'IT', 'ES'])) {
             $priceString = str_replace('.', '', $priceString);
             $priceString = str_replace(',', '.', $priceString);
         } else {
@@ -373,15 +434,11 @@ class AmazonScrapingService
         return (float) $priceString;
     }
 
-    /**
-     * Extract original price (before discount)
-     */
     private function extractOriginalPrice(string $html): ?float
     {
         $patterns = [
             '/<span[^>]*class="[^"]*a-price[^"]*a-text-price[^"]*"[^>]*>.*?<span[^>]*class="[^"]*a-offscreen[^"]*"[^>]*>([\d\s.,]+)<\/span>/is',
             '/<span[^>]*class="[^"]*a-text-strike[^"]*"[^>]*>([\d\s.,]+)<\/span>/i',
-            '/<span[^>]*class="[^"]*basisPrice[^"]*"[^>]*>([\d\s.,]+)<\/span>/i',
         ];
 
         foreach ($patterns as $pattern) {
@@ -392,39 +449,22 @@ class AmazonScrapingService
                 }
             }
         }
-
         return null;
     }
 
-    /**
-     * Extract discount percentage
-     */
     private function extractDiscountPercentage(string $html): ?int
     {
-        $patterns = [
-            '/-(\d+)%/',
-            '/Save\s+(\d+)%/i',
-            '/(\d+)%\s+off/i',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $html, $matches)) {
-                return (int) $matches[1];
-            }
+        if (preg_match('/-(\d+)%/', $html, $matches)) {
+            return (int) $matches[1];
         }
-
         return null;
     }
 
-    /**
-     * Extract availability status
-     */
     private function extractAvailability(string $html): string
     {
         $patterns = [
             '/<div[^>]*id="availability"[^>]*>.*?<span[^>]*>(.*?)<\/span>/is',
             '/<span[^>]*class="[^"]*a-color-success[^"]*"[^>]*>(.*?)<\/span>/is',
-            '/<span[^>]*class="[^"]*a-color-price[^"]*"[^>]*>(.*?)<\/span>/is',
         ];
 
         foreach ($patterns as $pattern) {
@@ -435,13 +475,9 @@ class AmazonScrapingService
                 }
             }
         }
-
         return 'Unknown';
     }
 
-    /**
-     * Check if product is in stock
-     */
     private function isInStock(string $html): bool
     {
         $inStockIndicators = [
@@ -449,10 +485,7 @@ class AmazonScrapingService
             'En stock',
             'Auf Lager',
             'Disponibile',
-            'En existencia',
             'Add to Cart',
-            'Ajouter au panier',
-            'In den Einkaufswagen',
         ];
 
         $outOfStockIndicators = [
@@ -460,8 +493,6 @@ class AmazonScrapingService
             'Out of Stock',
             'Temporairement en rupture',
             'Derzeit nicht verfügbar',
-            'Non disponibile',
-            'Agotado',
         ];
 
         $htmlLower = strtolower($html);
@@ -481,37 +512,20 @@ class AmazonScrapingService
         return false;
     }
 
-    /**
-     * Extract stock quantity
-     */
     private function extractStockQuantity(string $html): ?int
     {
-        $patterns = [
-            '/Only\s+(\d+)\s+left\s+in\s+stock/i',
-            '/(\d+)\s+disponibles?/i',
-            '/Nur\s+noch\s+(\d+)\s+auf\s+Lager/i',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $html, $matches)) {
-                return (int) $matches[1];
-            }
+        if (preg_match('/Only\s+(\d+)\s+left\s+in\s+stock/i', $html, $matches)) {
+            return (int) $matches[1];
         }
-
         return null;
     }
 
-    /**
-     * Extract main image URL
-     */
     private function extractImageUrl(string $html): ?string
     {
         $patterns = [
             '/"hiRes":"(https:\/\/[^"]+\.jpg)"/i',
             '/"large":"(https:\/\/[^"]+\.jpg)"/i',
             '/<img[^>]*id="landingImage"[^>]*src="([^"]+)"/i',
-            '/<img[^>]*class="[^"]*a-dynamic-image[^"]*"[^>]*src="([^"]+)"/i',
-            '/<meta[^>]*property="og:image"[^>]*content="([^"]+)"/i',
         ];
 
         foreach ($patterns as $pattern) {
@@ -522,13 +536,9 @@ class AmazonScrapingService
                 }
             }
         }
-
         return null;
     }
 
-    /**
-     * Extract all product images
-     */
     private function extractAllImages(string $html): array
     {
         $images = [];
@@ -546,24 +556,14 @@ class AmazonScrapingService
             }
         }
 
-        if (empty($images)) {
-            if (preg_match_all('/"(https:\/\/[^"]+_AC_[^"]+\.jpg)"/i', $html, $matches)) {
-                $images = array_unique($matches[1]);
-            }
-        }
-
         return array_values(array_unique($images));
     }
 
-    /**
-     * Extract product description
-     */
     private function extractDescription(string $html): ?string
     {
         $patterns = [
             '/<div[^>]*id="feature-bullets"[^>]*>(.*?)<\/div>/is',
             '/<div[^>]*id="productDescription"[^>]*>(.*?)<\/div>/is',
-            '/<meta[^>]*name="description"[^>]*content="([^"]+)"/i',
         ];
 
         foreach ($patterns as $pattern) {
@@ -574,13 +574,9 @@ class AmazonScrapingService
                 }
             }
         }
-
         return null;
     }
 
-    /**
-     * Extract product features
-     */
     private function extractFeatures(string $html): array
     {
         $features = [];
@@ -599,16 +595,11 @@ class AmazonScrapingService
         return $features;
     }
 
-    /**
-     * Extract rating (stars)
-     */
     private function extractRating(string $html): ?float
     {
         $patterns = [
             '/<span[^>]*class="[^"]*a-icon-alt[^"]*"[^>]*>([\d.,]+)\s+out\s+of\s+5\s+stars/i',
             '/<span[^>]*class="[^"]*a-icon-alt[^"]*"[^>]*>([\d.,]+)\s+sur\s+5\s+étoiles/i',
-            '/<span[^>]*class="[^"]*a-icon-alt[^"]*"[^>]*>([\d.,]+)\s+von\s+5\s+Sternen/i',
-            '/<i[^>]*class="[^"]*a-star[^"]*"[^>]*>.*?([\d.,]+)\s+out\s+of/is',
         ];
 
         foreach ($patterns as $pattern) {
@@ -617,54 +608,26 @@ class AmazonScrapingService
                 return (float) $rating;
             }
         }
-
         return null;
     }
 
-    /**
-     * Extract rating count
-     */
     private function extractRatingCount(string $html): ?int
     {
-        $patterns = [
-            '/<span[^>]*id="acrCustomerReviewText"[^>]*>([\d,]+)\s+ratings?/i',
-            '/<span[^>]*id="acrCustomerReviewText"[^>]*>([\d\s.]+)\s+évaluations?/i',
-            '/<span[^>]*id="acrCustomerReviewText"[^>]*>([\d\s.]+)\s+Sternebewertungen?/i',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $html, $matches)) {
-                $count = preg_replace('/[^\d]/', '', $matches[1]);
-                return (int) $count;
-            }
+        if (preg_match('/<span[^>]*id="acrCustomerReviewText"[^>]*>([\d,\s.]+)\s+/i', $html, $matches)) {
+            $count = preg_replace('/[^\d]/', '', $matches[1]);
+            return (int) $count;
         }
-
         return null;
     }
 
-    /**
-     * Extract review count
-     */
     private function extractReviewCount(string $html): ?int
     {
-        $patterns = [
-            '/(\d+)\s+customer\s+reviews?/i',
-            '/(\d+)\s+commentaires?\s+client/i',
-            '/(\d+)\s+Kundenrezensionen?/i',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $html, $matches)) {
-                return (int) $matches[1];
-            }
+        if (preg_match('/(\d+)\s+customer\s+reviews?/i', $html, $matches)) {
+            return (int) $matches[1];
         }
-
         return null;
     }
 
-    /**
-     * Extract product categories
-     */
     private function extractCategories(string $html): array
     {
         $categories = [];
@@ -683,32 +646,18 @@ class AmazonScrapingService
         return $categories;
     }
 
-    /**
-     * Extract brand
-     */
     private function extractBrand(string $html): ?string
     {
-        $patterns = [
-            '/<a[^>]*id="bylineInfo"[^>]*>(.*?)<\/a>/is',
-            '/<span[^>]*class="[^"]*a-size-base[^"]*po-break-word[^"]*"[^>]*>(.*?)<\/span>/is',
-        ];
-
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $html, $matches)) {
-                $brand = strip_tags(trim($matches[1]));
-                $brand = preg_replace('/^(Brand:\s*|Marque\s*:\s*|Marke:\s*)/i', '', $brand);
-                if (!empty($brand)) {
-                    return $brand;
-                }
+        if (preg_match('/<a[^>]*id="bylineInfo"[^>]*>(.*?)<\/a>/is', $html, $matches)) {
+            $brand = strip_tags(trim($matches[1]));
+            $brand = preg_replace('/^(Brand:\s*|Marque\s*:\s*)/i', '', $brand);
+            if (!empty($brand)) {
+                return $brand;
             }
         }
-
         return null;
     }
 
-    /**
-     * Extract specifications
-     */
     private function extractSpecifications(string $html): array
     {
         $specs = [];
@@ -728,15 +677,11 @@ class AmazonScrapingService
         return $specs;
     }
 
-    /**
-     * Extract seller information
-     */
     private function extractSeller(string $html): ?string
     {
         $patterns = [
             '/<div[^>]*id="merchant-info"[^>]*>.*?<a[^>]*>(.*?)<\/a>/is',
             '/<span[^>]*>Ships from and sold by\s+(.*?)<\/span>/is',
-            '/<span[^>]*>Expédié et vendu par\s+(.*?)<\/span>/is',
         ];
 
         foreach ($patterns as $pattern) {
@@ -747,344 +692,19 @@ class AmazonScrapingService
                 }
             }
         }
-
         return null;
     }
 
-    /**
-     * Check if Prime eligible
-     */
     private function isPrimeEligible(string $html): bool
     {
         return (bool) preg_match('/<i[^>]*class="[^"]*a-icon-prime[^"]*"/i', $html);
     }
 
-    /**
-     * Fetch product page HTML with ADVANCED anti-detection
-     */
-    private function fetchProductPage(string $url): string
-    {
-        // 🎲 Délai aléatoire intelligent (1-3 secondes)
-        $delay = rand(1000000, 3000000);
-        usleep($delay);
-        
-        $userAgent = $this->userAgents[array_rand($this->userAgents)];
-        $marketplace = $this->extractMarketplaceFromUrl($url);
-        
-        // Extraire le domaine Amazon pour le Referer
-        $parsedUrl = parse_url($url);
-        $baseUrl = ($parsedUrl['scheme'] ?? 'https') . '://' . ($parsedUrl['host'] ?? 'www.amazon.com');
-        
-        // 🎯 Varier le referer pour paraître plus naturel
-        $referers = [
-            $baseUrl . '/',
-            $baseUrl . '/s?k=search',
-            'https://www.google.com/',
-            'https://www.google.' . strtolower($marketplace === 'UK' ? 'co.uk' : ($marketplace === 'US' ? 'com' : strtolower($marketplace))) . '/',
-        ];
-        $referer = $referers[array_rand($referers)];
-        
-        // 🌍 Accept-Language basé sur le marketplace
-        $acceptLanguage = $this->getAcceptLanguageForMarketplace($marketplace);
-        
-        // 🔥 Headers ultra-réalistes
-        $headers = [
-            'User-Agent' => $userAgent,
-            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language' => $acceptLanguage,
-            'Accept-Encoding' => 'gzip, deflate, br, zstd',
-            'DNT' => '1',
-            'Connection' => 'keep-alive',
-            'Upgrade-Insecure-Requests' => '1',
-            'Sec-Fetch-Dest' => 'document',
-            'Sec-Fetch-Mode' => 'navigate',
-            'Sec-Fetch-Site' => rand(0, 1) ? 'none' : 'same-origin', // Varier
-            'Sec-Fetch-User' => '?1',
-            'sec-ch-ua' => '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            'sec-ch-ua-mobile' => '?0',
-            'sec-ch-ua-platform' => '"Windows"',
-            'Cache-Control' => 'max-age=0',
-            'Referer' => $referer,
-        ];
-        
-        Log::info("🚀 Fetching with anti-detection", [
-            'url' => substr($url, 0, 100) . '...',
-            'marketplace' => $marketplace,
-            'user_agent_preview' => substr($userAgent, 0, 50) . '...',
-            'referer' => $referer,
-            'accept_language' => $acceptLanguage,
-        ]);
-        
-        try {
-            $response = Http::withHeaders($headers)
-                ->withOptions([
-                    'verify' => true,
-                    'timeout' => 30,
-                    'connect_timeout' => 10,
-                    'allow_redirects' => [
-                        'max' => 5,
-                        'strict' => false,
-                        'referer' => true,
-                        'track_redirects' => true,
-                    ],
-                    'http_errors' => false,
-                ])
-                ->retry(2, 2000, function ($exception) {
-                    // Retry seulement sur timeout ou erreur réseau
-                    return $exception instanceof \Illuminate\Http\Client\ConnectionException;
-                })
-                ->get($url);
-
-            if (!$response->successful()) {
-                Log::warning("❌ HTTP request failed", [
-                    'status' => $response->status(),
-                    'url' => substr($url, 0, 100),
-                    'headers' => $response->headers(),
-                ]);
-                throw new Exception("HTTP {$response->status()} error");
-            }
-
-            $html = $response->body();
-
-            if ($this->isCaptchaPage($html)) {
-                Log::error("⚠️ CAPTCHA DETECTED!", [
-                    'url' => substr($url, 0, 100),
-                    'marketplace' => $marketplace,
-                    'user_agent' => substr($userAgent, 0, 60),
-                ]);
-                throw new Exception('🤖 Amazon captcha detected - automated access blocked. Please wait and retry later.');
-            }
-
-            Log::info("✅ Successfully fetched page", [
-                'url' => substr($url, 0, 100),
-                'html_size' => strlen($html),
-            ]);
-
-            return $html;
-            
-        } catch (Exception $e) {
-            Log::error("💥 Fetch exception", [
-                'url' => substr($url, 0, 100),
-                'error' => $e->getMessage(),
-                'type' => get_class($e),
-            ]);
-            throw $e;
-        }
-    }
-    
-    /**
-     * Get Accept-Language header based on marketplace
-     */
-    private function getAcceptLanguageForMarketplace(string $marketplace): string
-    {
-        return match ($marketplace) {
-            'FR' => 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'DE' => 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
-            'ES' => 'es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7',
-            'IT' => 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
-            'UK' => 'en-GB,en;q=0.9,en-US;q=0.8',
-            'BR' => 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-            'IN' => 'en-IN,en;q=0.9,hi;q=0.8,en-US;q=0.7',
-            'CA' => 'en-CA,en;q=0.9,fr-CA;q=0.8,fr;q=0.7',
-            'EU' => 'en-GB,en;q=0.9,de;q=0.8,fr;q=0.7',
-            default => 'en-US,en;q=0.9',
-        };
-    }
-
-    /**
-     * Check if captcha page
-     */
-    private function isCaptchaPage(string $html): bool
-    {
-        $indicators = [
-            'captcha',
-            'robot check',
-            'Type the characters you see',
-            'Sorry, we just need to make sure you\'re not a robot',
-            'Enter the characters you see',
-            'automated access',
-            'unusual traffic',
-            'verify you\'re human',
-            'amazon.com/captcha',
-            'id="captchacharacters"',
-            'name="captchacharacters"',
-        ];
-        
-        $htmlLower = strtolower($html);
-        
-        foreach ($indicators as $indicator) {
-            if (str_contains($htmlLower, strtolower($indicator))) {
-                Log::warning("Captcha indicator found", ['indicator' => $indicator]);
-                return true;
-            }
-        }
-        
-        // Vérifier aussi si le titre de la page contient "captcha" ou "robot"
-        if (preg_match('/<title[^>]*>(.*?)<\/title>/is', $html, $matches)) {
-            $title = strtolower($matches[1]);
-            if (str_contains($title, 'captcha') || str_contains($title, 'robot')) {
-                Log::warning("Captcha detected in page title", ['title' => $matches[1]]);
-                return true;
-            }
-        }
-        
-        return false;
-    }
-
-    /**
-     * Validate product data
-     */
-    private function isValidProductData(array $data): bool
-    {
-        return !empty($data['title']) && 
-               !empty($data['asin']) &&
-               !empty($data['marketplace']);
-    }
-
-    /**
-     * Extract marketplace from URL
-     */
-    private function extractMarketplaceFromUrl(string $url): string
-    {
-        $host = parse_url($url, PHP_URL_HOST) ?? '';
-        $host = strtolower($host);
-        
-        $marketplaceMap = [
-            'amzn.com.br' => 'BR',
-            'amzn.co.uk' => 'UK',
-            'amzn.de' => 'DE',
-            'amzn.fr' => 'FR',
-            'amzn.it' => 'IT',
-            'amzn.es' => 'ES',
-            'amzn.in' => 'IN',
-            'amzn.ca' => 'CA',
-            'amzn.eu' => 'EU',
-            'amazon.com.br' => 'BR',
-            'amazon.co.uk' => 'UK',
-            'amazon.de' => 'DE',
-            'amazon.fr' => 'FR',
-            'amazon.it' => 'IT',
-            'amazon.es' => 'ES',
-            'amazon.in' => 'IN',
-            'amazon.ca' => 'CA',
-            'amazon.eu' => 'EU',
-            'amazon.com' => 'US',
-        ];
-
-        foreach ($marketplaceMap as $domain => $marketplace) {
-            if (str_contains($host, $domain)) {
-                return $marketplace;
-            }
-        }
-        
-        return 'US';
-    }
-
-    /**
-     * Get country name from marketplace
-     */
-    private function getCountryFromMarketplace(string $marketplace): string
-    {
-        return match ($marketplace) {
-            'US' => 'United States',
-            'UK' => 'United Kingdom',
-            'DE' => 'Germany',
-            'FR' => 'France',
-            'IT' => 'Italy',
-            'ES' => 'Spain',
-            'BR' => 'Brazil',
-            'IN' => 'India',
-            'CA' => 'Canada',
-            'EU' => 'Europe',
-            default => 'United States',
-        };
-    }
-
-    /**
-     * Get currency from marketplace
-     */
-    private function getCurrencyFromMarketplace(string $marketplace): string
-    {
-        return match ($marketplace) {
-            'FR', 'DE', 'ES', 'IT', 'EU' => 'EUR',
-            'UK' => 'GBP',
-            'CA' => 'CAD',
-            'BR' => 'BRL',
-            'IN' => 'INR',
-            default => 'USD',
-        };
-    }
-
-    /**
-     * Get currency symbols for marketplace
-     */
-    private function getCurrencySymbolsForMarketplace(string $marketplace): array
-    {
-        return match ($marketplace) {
-            'US' => ['$', 'USD'],
-            'UK' => ['£', 'GBP', 'p'],
-            'DE', 'FR', 'IT', 'ES', 'EU' => ['€', 'EUR'],
-            'BR' => ['R$', 'BRL'],
-            'IN' => ['₹', 'INR', 'Rs'],
-            'CA' => ['$', 'CAD', 'C$'],
-            default => ['$', 'USD'],
-        };
-    }
-
-    /**
-     * Check if short URL
-     */
-    private function isShortUrl(string $url): bool
-    {
-        return str_contains($url, 'a.co') || 
-               str_contains($url, 'amzn.to') || 
-               str_contains($url, 'amzn.eu') ||
-               str_contains($url, 'amzn.com');
-    }
-
-    /**
-     * Resolve short URL
-     */
-    public function resolveShortUrl(string $shortUrl): ?string
-    {
-        try {
-            $userAgent = $this->userAgents[array_rand($this->userAgents)];
-            
-            $response = Http::withHeaders([
-                'User-Agent' => $userAgent,
-                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language' => 'en-US,en;q=0.9',
-                'Accept-Encoding' => 'gzip, deflate, br',
-                'DNT' => '1',
-                'Connection' => 'keep-alive',
-                'Upgrade-Insecure-Requests' => '1',
-                'Sec-Fetch-Dest' => 'document',
-                'Sec-Fetch-Mode' => 'navigate',
-                'Sec-Fetch-Site' => 'none',
-                'Sec-Fetch-User' => '?1',
-            ])->timeout(10)->get($shortUrl);
-
-            if ($response->successful()) {
-                return $response->effectiveUri();
-            }
-        } catch (Exception $e) {
-            Log::warning('Short URL resolution failed: ' . $e->getMessage());
-        }
-
-        return null;
-    }
-
-    /**
-     * Validate Amazon URL
-     */
     public function validateAmazonUrl(string $url): bool
     {
         $amazonDomains = [
             'amazon.com', 'amazon.de', 'amazon.co.uk', 'amazon.fr',
-            'amazon.it', 'amazon.es', 'amazon.com.br', 'amazon.in',
-            'amazon.ca', 'amazon.eu', 'a.co', 'amzn.to', 'amzn.eu',
-            'amzn.com', 'amzn.com.br', 'amzn.co.uk', 'amzn.de',
-            'amzn.fr', 'amzn.it', 'amzn.es', 'amzn.in', 'amzn.ca',
+            'amazon.it', 'amazon.es', 'a.co', 'amzn.to',
         ];
 
         $host = strtolower(parse_url($url, PHP_URL_HOST) ?? '');
@@ -1096,89 +716,5 @@ class AmazonScrapingService
         }
 
         return false;
-    }
-
-    /**
-     * Scrape with intelligent retry and exponential backoff
-     */
-    public function scrapeProductWithRetry(string $url, int $maxRetries = 3): array
-    {
-        $lastError = null;
-        
-        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-            Log::info("🔄 Scraping attempt {$attempt}/{$maxRetries}", [
-                'url' => substr($url, 0, 100) . '...',
-            ]);
-            
-            // Premier essai avec cache, les suivants sans cache
-            $result = $this->scrapeProduct($url, $attempt === 1);
-            
-            if ($result['success']) {
-                Log::info("✅ Success on attempt {$attempt}", [
-                    'title' => $result['data']['title'] ?? 'Unknown',
-                ]);
-                return $result;
-            }
-            
-            $lastError = $result['error'] ?? 'Unknown error';
-            
-            // Si c'est un captcha, attendre BEAUCOUP plus longtemps
-            if (str_contains(strtolower($lastError), 'captcha')) {
-                if ($attempt < $maxRetries) {
-                    // Backoff très long pour captcha : 5, 10, 20 secondes
-                    $waitSeconds = pow(2, $attempt) * 5;
-                    Log::warning("⚠️ Captcha on attempt {$attempt}, waiting {$waitSeconds}s before retry");
-                    sleep($waitSeconds);
-                }
-            } 
-            // Erreur HTTP : backoff modéré
-            elseif (preg_match('/HTTP (\d+)/', $lastError, $matches)) {
-                $statusCode = (int) $matches[1];
-                
-                // 429 Too Many Requests : attendre beaucoup
-                if ($statusCode === 429) {
-                    $waitSeconds = 30 + ($attempt * 10); // 40s, 50s, 60s
-                    Log::warning("⏳ Rate limited (429), waiting {$waitSeconds}s");
-                    if ($attempt < $maxRetries) {
-                        sleep($waitSeconds);
-                    }
-                }
-                // 503 Service Unavailable : attendre moyennement
-                elseif ($statusCode === 503) {
-                    $waitSeconds = 10 + ($attempt * 5); // 15s, 20s, 25s
-                    Log::warning("🔧 Service unavailable (503), waiting {$waitSeconds}s");
-                    if ($attempt < $maxRetries) {
-                        sleep($waitSeconds);
-                    }
-                }
-                // Autres erreurs : backoff standard
-                else {
-                    $waitSeconds = pow(2, $attempt); // 2s, 4s, 8s
-                    if ($attempt < $maxRetries) {
-                        Log::info("⏱️ HTTP error, waiting {$waitSeconds}s");
-                        sleep($waitSeconds);
-                    }
-                }
-            }
-            // Autres erreurs : backoff standard avec jitter
-            else {
-                if ($attempt < $maxRetries) {
-                    $waitSeconds = pow(2, $attempt) + rand(1, 3); // 3-5s, 5-7s, 9-11s
-                    Log::info("⏱️ Error, waiting {$waitSeconds}s before retry");
-                    sleep($waitSeconds);
-                }
-            }
-        }
-        
-        Log::error("❌ All {$maxRetries} attempts failed", [
-            'url' => substr($url, 0, 100),
-            'last_error' => $lastError,
-        ]);
-        
-        return [
-            'success' => false,
-            'error' => "Failed after {$maxRetries} attempts: {$lastError}",
-            'url' => $url,
-        ];
     }
 }
