@@ -17,102 +17,6 @@ class AmazonScrapingService
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
     ];
 
-    private function fetchProductPageWithProxy(string $url): string
-    {
-        $scraperApiKey = env('SCRAPER_API_KEY');
-        
-        if ($scraperApiKey) {
-            return $this->fetchWithScraperAPI($url, $scraperApiKey);
-        }
-        
-        return $this->fetchWithAdvancedEvasion($url);
-    }
-
-    private function fetchWithScraperAPI(string $url, string $apiKey): string
-    {
-        $scraperUrl = "http://api.scraperapi.com/";
-        
-        try {
-            $response = Http::timeout(60)->get($scraperUrl, [
-                'api_key' => $apiKey,
-                'url' => $url,
-                'render' => false,
-                'country_code' => 'us',
-            ]);
-
-            if (!$response->successful()) {
-                throw new Exception("ScraperAPI failed: " . $response->status());
-            }
-
-            return $response->body();
-        } catch (Exception $e) {
-            Log::error("ScraperAPI error: " . $e->getMessage());
-            throw $e;
-        }
-    }
-
-    private function fetchWithAdvancedEvasion(string $url): string
-    {
-        $delay = rand(5000000, 10000000);
-        usleep($delay);
-        
-        $userAgent = $this->userAgents[array_rand($this->userAgents)];
-        $marketplace = $this->extractMarketplaceFromUrl($url);
-        
-        $parsedUrl = parse_url($url);
-        $baseUrl = ($parsedUrl['scheme'] ?? 'https') . '://' . ($parsedUrl['host'] ?? 'www.amazon.com');
-        
-        $referer = 'https://www.google.com/search?q=amazon+product';
-        
-        $acceptLanguage = $this->getAcceptLanguageForMarketplace($marketplace);
-        
-        $headers = [
-            'User-Agent' => $userAgent,
-            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language' => $acceptLanguage,
-            'Accept-Encoding' => 'gzip, deflate, br',
-            'Connection' => 'keep-alive',
-            'Upgrade-Insecure-Requests' => '1',
-            'Sec-Fetch-Dest' => 'document',
-            'Sec-Fetch-Mode' => 'navigate',
-            'Sec-Fetch-Site' => 'cross-site',
-            'Sec-Fetch-User' => '?1',
-            'Cache-Control' => 'max-age=0',
-            'Referer' => $referer,
-        ];
-        
-        Log::info("🚀 Fetching with EXTREME evasion", [
-            'url' => substr($url, 0, 80),
-            'delay_seconds' => $delay / 1000000,
-        ]);
-        
-        try {
-            $response = Http::withHeaders($headers)
-                ->withOptions([
-                    'verify' => true,
-                    'timeout' => 45,
-                    'connect_timeout' => 15,
-                    'allow_redirects' => true,
-                ])
-                ->get($url);
-
-            if (!$response->successful()) {
-                throw new Exception("HTTP {$response->status()} error");
-            }
-
-            $html = $response->body();
-
-            if ($this->isCaptchaPage($html)) {
-                throw new Exception('🤖 Amazon captcha detected');
-            }
-
-            return $html;
-            
-        } catch (Exception $e) {
-            throw $e;
-        }
-    }
-
     public function scrapeProduct(string $url, bool $useCache = true): array
     {
         try {
@@ -130,6 +34,7 @@ class AmazonScrapingService
                 $cachedData = Cache::get($cacheKey);
                 
                 if ($cachedData !== null) {
+                    Log::info("💾 Cache HIT", ['url' => substr($url, 0, 100)]);
                     return [
                         'success' => true,
                         'data' => $cachedData,
@@ -146,7 +51,9 @@ class AmazonScrapingService
             $marketplace = $this->extractMarketplaceFromUrl($url);
             $country = $this->getCountryFromMarketplace($marketplace);
 
-            $html = $this->fetchProductPageWithProxy($url);
+            Log::info("🎯 Scraping", ['asin' => $asin, 'marketplace' => $marketplace]);
+
+            $html = $this->fetchProductPage($url);
 
             $productData = $this->extractAllProductData($html, $url, $asin, $marketplace, $country);
             
@@ -162,6 +69,8 @@ class AmazonScrapingService
                 $cacheKey = 'amazon_enriched_' . md5($url);
                 Cache::put($cacheKey, $productData, now()->addHours(1));
             }
+
+            Log::info("✅ Success", ['title' => substr($productData['title'], 0, 60)]);
 
             return [
                 'success' => true,
@@ -180,6 +89,61 @@ class AmazonScrapingService
                 'error' => $e->getMessage(),
                 'url' => $url,
             ];
+        }
+    }
+
+    private function fetchProductPage(string $url): string
+    {
+        $delay = rand(5000000, 10000000);
+        usleep($delay);
+        
+        $userAgent = $this->userAgents[array_rand($this->userAgents)];
+        $marketplace = $this->extractMarketplaceFromUrl($url);
+        
+        $referer = 'https://www.google.com/search?q=amazon+product';
+        $acceptLanguage = $this->getAcceptLanguageForMarketplace($marketplace);
+        
+        $headers = [
+            'User-Agent' => $userAgent,
+            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language' => $acceptLanguage,
+            'Accept-Encoding' => 'gzip, deflate, br',
+            'Connection' => 'keep-alive',
+            'Upgrade-Insecure-Requests' => '1',
+            'Sec-Fetch-Dest' => 'document',
+            'Sec-Fetch-Mode' => 'navigate',
+            'Sec-Fetch-Site' => 'cross-site',
+            'Sec-Fetch-User' => '?1',
+            'Cache-Control' => 'max-age=0',
+            'Referer' => $referer,
+        ];
+        
+        Log::info("🚀 Fetching", ['delay_sec' => round($delay / 1000000, 1)]);
+        
+        try {
+            $response = Http::withHeaders($headers)
+                ->withOptions([
+                    'verify' => true,
+                    'timeout' => 45,
+                    'connect_timeout' => 15,
+                    'allow_redirects' => true,
+                ])
+                ->get($url);
+
+            if (!$response->successful()) {
+                throw new Exception("HTTP {$response->status()} error");
+            }
+
+            $html = $response->body();
+
+            if ($this->isCaptchaPage($html)) {
+                throw new Exception('Amazon captcha detected');
+            }
+
+            return $html;
+            
+        } catch (Exception $e) {
+            throw $e;
         }
     }
 
