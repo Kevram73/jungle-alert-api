@@ -5,10 +5,10 @@ on:
   # Triggers the workflow on push or pull request events but only for the "main" branch
   push:
     branches:
-      - main
+      - master
   pull_request:
     branches:
-      - main
+      - master
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -52,7 +52,7 @@ jobs:
           password: ${{ secrets.SFTP_PASSWORD }}
           port: ${{ secrets.SFTP_PORT || 22 }}
           source: "deploy.tar.gz"
-          target: ${{ secrets.SFTP_DEPLOY_PATH || '/var/www/pretconnectloan' }}
+          target: ${{ secrets.SFTP_DEPLOY_PATH || '/var/www/jungle_alert' }}
 
       - name: 📂 Extract files on server
         uses: appleboy/ssh-action@v1.0.3
@@ -62,7 +62,7 @@ jobs:
           password: ${{ secrets.SFTP_PASSWORD }}
           port: ${{ secrets.SFTP_PORT || 22 }}
           script: |
-            cd ${{ secrets.SFTP_DEPLOY_PATH || '/var/www/pretconnectloan' }}
+            cd ${{ secrets.SFTP_DEPLOY_PATH || '/var/www/jungle_alert' }}
             tar -xzf deploy.tar.gz
             rm deploy.tar.gz
             echo "✅ Fichiers déployés avec succès"
