@@ -48,3 +48,4 @@ echo ""
 echo "Pour voir les logs: docker-compose logs -f"
 echo "Pour arrêter: docker-compose down"
 
+

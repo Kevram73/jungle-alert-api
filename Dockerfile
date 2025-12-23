@@ -68,3 +68,4 @@ EXPOSE 5000
 # Commande par défaut - démarrer l'application
 CMD ["python", "run.py"]
 
+
