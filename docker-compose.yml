@@ -1,0 +1,54 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: junglealert-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-junglealert}
+      MYSQL_USER: ${DB_USER:-jungleuser}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-rootpassword}
+    ports:
+      - "3308:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: junglealert-app
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./output:/app/output
+      - .:/app
+    environment:
+      - FLASK_ENV=development
+      - FLASK_APP=run.py
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_USER=${DB_USER:-jungleuser}
+      - DB_PASSWORD=${DB_PASSWORD:-rootpassword}
+      - DB_NAME=${DB_NAME:-junglealert}
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-key-change-in-production}
+      - SELENIUM_HEADLESS=true
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:8080
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  mysql_data:
+
