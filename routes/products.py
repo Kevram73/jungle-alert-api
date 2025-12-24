@@ -331,14 +331,20 @@ def update(product_id):
 @products_bp.route('/products/<int:product_id>', methods=['DELETE'])
 @jwt_required()
 def destroy(product_id):
-    """Delete a product"""
+    """Delete a product and its associated alerts"""
     user_id = get_jwt_identity()
     product = Product.query.filter_by(id=product_id, user_id=user_id).first_or_404()
     
+    # Delete all alerts associated with this product
+    alerts = Alert.query.filter_by(product_id=product_id).all()
+    for alert in alerts:
+        db.session.delete(alert)
+    
+    # Delete the product (cascade will also handle alerts, but explicit deletion ensures it)
     db.session.delete(product)
     db.session.commit()
     
-    return jsonify({'message': 'Product deleted successfully'}), 200
+    return jsonify({'message': 'Product and associated alerts deleted successfully'}), 200
 
 @products_bp.route('/products/<int:product_id>/scrape-update', methods=['POST'])
 @jwt_required()
