@@ -15,6 +15,24 @@ products_bp = Blueprint('products', __name__)
 scraping_service = AmazonScrapingService()
 notification_service = NotificationService()
 
+def get_current_user_id():
+    """Get current user ID from JWT token and verify user exists
+    Returns: (user_id, error_response, status_code)
+    If successful: (user_id, None, None)
+    If error: (None, jsonify_response, status_code)
+    """
+    user_id_str = get_jwt_identity()
+    try:
+        user_id = int(user_id_str)
+    except (ValueError, TypeError):
+        return None, jsonify({'message': 'Invalid user identity'}), 401
+    
+    user = User.query.get(user_id)
+    if not user:
+        return None, jsonify({'message': 'User not found'}), 404
+    
+    return user_id, None, None
+
 def extract_marketplace_from_url(url):
     """Extract marketplace from URL"""
     from urllib.parse import urlparse
@@ -55,7 +73,9 @@ def currency_for_marketplace(marketplace):
 @jwt_required()
 def index():
     """Get user's products"""
-    user_id = get_jwt_identity()
+    user_id, error_response, status_code = get_current_user_id()
+    if error_response:
+        return error_response, status_code
     
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
@@ -79,7 +99,10 @@ def index():
 @jwt_required()
 def store():
     """Create a new product"""
-    user_id = get_jwt_identity()
+    user_id, error_response, status_code = get_current_user_id()
+    if error_response:
+        return error_response, status_code
+    
     data = request.get_json()
     
     if not data.get('amazon_url'):

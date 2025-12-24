@@ -1,9 +1,10 @@
-from flask import Flask
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flasgger import Swagger
 from config import config
 from extensions import db, migrate, jwt
 import os
+import traceback
 
 def create_app(config_name=None):
     """Application factory"""
@@ -135,6 +136,32 @@ def create_app(config_name=None):
     @app.route('/api/health')
     def health():
         return {'status': 'healthy', 'message': 'API is running'}, 200
+    
+    # Error handlers for JSON responses
+    @app.errorhandler(500)
+    def internal_error(error):
+        """Handle 500 errors and return JSON"""
+        if request.path.startswith('/api/'):
+            # Return JSON for API errors
+            return jsonify({
+                'success': False,
+                'message': 'Internal server error',
+                'error': str(error) if app.config.get('DEBUG') else 'An error occurred',
+                'traceback': traceback.format_exc() if app.config.get('DEBUG') else None
+            }), 500
+        # For non-API routes, use default Flask error handling
+        return error
+    
+    @app.errorhandler(404)
+    def not_found(error):
+        """Handle 404 errors and return JSON for API routes"""
+        if request.path.startswith('/api/'):
+            return jsonify({
+                'success': False,
+                'message': 'Resource not found',
+                'error': 'The requested resource was not found'
+            }), 404
+        return error
     
     return app
 
