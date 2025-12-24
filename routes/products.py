@@ -307,7 +307,52 @@ def scrape_and_update(product_id):
 
 @products_bp.route('/products/scrape-preview', methods=['POST'])
 def scrape_preview():
-    """Scrape product preview (public endpoint)"""
+    """
+    Scrape product preview (public endpoint)
+    ---
+    tags:
+      - Products
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - amazon_url
+          properties:
+            amazon_url:
+              type: string
+              example: https://amzn.eu/d/bvp7pE1
+              description: URL du produit Amazon (supporte les URLs raccourcies)
+    responses:
+      200:
+        description: Product data scraped successfully
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+            message:
+              type: string
+            data:
+              type: object
+              properties:
+                asin:
+                  type: string
+                title:
+                  type: string
+                price:
+                  type: number
+                currency:
+                  type: string
+                marketplace:
+                  type: string
+      400:
+        description: Scraping failed
+      422:
+        description: Invalid Amazon URL
+    """
     data = request.get_json()
     
     if not data.get('amazon_url'):

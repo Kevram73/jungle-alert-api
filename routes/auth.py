@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from extensions import db
 from models.user import User
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
@@ -8,7 +8,53 @@ auth_bp = Blueprint('auth', __name__)
 
 @auth_bp.route('/auth/register', methods=['POST'])
 def register():
-    """Register a new user"""
+    """
+    Register a new user
+    ---
+    tags:
+      - Authentication
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - email
+            - username
+            - password
+            - first_name
+            - last_name
+          properties:
+            email:
+              type: string
+              format: email
+              example: user@example.com
+            username:
+              type: string
+              example: johndoe
+            password:
+              type: string
+              example: SecurePass123!
+            first_name:
+              type: string
+              example: John
+            last_name:
+              type: string
+              example: Doe
+    responses:
+      201:
+        description: User registered successfully
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+            user:
+              type: object
+      422:
+        description: Validation error
+    """
     try:
         data = request.get_json()
         
@@ -65,12 +111,52 @@ def register():
         db.session.rollback()
         return jsonify({
             'message': 'Failed to create user',
-            'error': str(e) if request.app.config.get('DEBUG') else 'An error occurred'
+            'error': str(e) if current_app.config.get('DEBUG') else 'An error occurred'
         }), 500
 
 @auth_bp.route('/auth/login', methods=['POST'])
 def login():
-    """Login user"""
+    """
+    Login user and get access token
+    ---
+    tags:
+      - Authentication
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - email
+            - password
+          properties:
+            email:
+              type: string
+              format: email
+              example: user@example.com
+            password:
+              type: string
+              example: SecurePass123!
+    responses:
+      200:
+        description: Login successful
+        schema:
+          type: object
+          properties:
+            access_token:
+              type: string
+            refresh_token:
+              type: string
+            token_type:
+              type: string
+            user:
+              type: object
+      401:
+        description: Invalid credentials
+      422:
+        description: Validation error
+    """
     try:
         data = request.get_json()
         
@@ -99,7 +185,7 @@ def login():
     except Exception as e:
         return jsonify({
             'message': 'Login failed',
-            'error': str(e) if request.app.config.get('DEBUG') else 'An error occurred'
+            'error': str(e) if current_app.config.get('DEBUG') else 'An error occurred'
         }), 500
 
 @auth_bp.route('/auth/logout', methods=['POST'])
