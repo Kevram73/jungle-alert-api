@@ -146,6 +146,9 @@ def store():
                 'discount_percentage': data_dict.get('discount_percentage'),
                 'features': data_dict.get('features'),
                 'images': data_dict.get('images'),
+                # Ne pas écraser la devise et le marketplace - ils sont déjà correctement définis
+                # 'currency': currency,  # Déjà défini plus haut
+                # 'marketplace': marketplace,  # Déjà défini plus haut
             })
         else:
             # Fallback data
@@ -205,20 +208,20 @@ def update(product_id):
     data = request.get_json()
     old_price = product.current_price
     
-    # Update fields
+    # Update fields (mais pas marketplace et currency - ils sont gérés séparément)
     for key in ['title', 'description', 'image_url', 'current_price', 'target_price', 
-                'is_active', 'currency', 'marketplace', 'availability', 'rating', 
-                'review_count', 'category']:
+                'is_active', 'availability', 'rating', 'review_count', 'category']:
         if key in data:
             setattr(product, key, data[key])
     
-    # Update marketplace if URL changed
+    # Toujours mettre à jour marketplace et currency à partir de l'URL (pas des données envoyées)
     if 'amazon_url' in data:
         product.amazon_url = data['amazon_url']
-        marketplace = extract_marketplace_from_url(data['amazon_url'])
-        product.marketplace = marketplace
-        if not product.currency:
-            product.currency = currency_for_marketplace(marketplace)
+    
+    # Toujours recalculer marketplace et currency à partir de l'URL actuelle
+    marketplace = extract_marketplace_from_url(product.amazon_url)
+    product.marketplace = marketplace
+    product.currency = currency_for_marketplace(marketplace)
     
     product.updated_at = datetime.utcnow()
     db.session.commit()
@@ -282,10 +285,10 @@ def scrape_and_update(product_id):
     product.last_price_check = datetime.utcnow()
     product.updated_at = datetime.utcnow()
     
+    # Toujours mettre à jour marketplace et currency à partir de l'URL (pas des données scrapées)
     marketplace = extract_marketplace_from_url(product.amazon_url)
     product.marketplace = marketplace
-    if not product.currency:
-        product.currency = currency_for_marketplace(marketplace)
+    product.currency = currency_for_marketplace(marketplace)
     
     db.session.commit()
     
