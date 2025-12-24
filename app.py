@@ -14,6 +14,9 @@ def create_app(config_name=None):
     config_name = config_name or os.getenv('FLASK_ENV', 'development')
     app.config.from_object(config[config_name])
     
+    # Force JSON error responses for API routes even in DEBUG mode
+    app.config['PROPAGATE_EXCEPTIONS'] = True
+    
     # Initialize extensions
     db.init_app(app)
     migrate.init_app(app, db)
@@ -143,14 +146,51 @@ def create_app(config_name=None):
         """Handle 500 errors and return JSON"""
         if request.path.startswith('/api/'):
             # Return JSON for API errors
+            import traceback as tb
+            error_traceback = tb.format_exc() if app.config.get('DEBUG') else None
+            error_message = str(error) if hasattr(error, 'description') else 'Internal server error'
+            
+            # Extract more details from IntegrityError if present
+            if 'IntegrityError' in str(error) or 'foreign key constraint' in str(error).lower():
+                error_message = 'Database constraint error: The user associated with this request may not exist'
+            
             return jsonify({
                 'success': False,
                 'message': 'Internal server error',
-                'error': str(error) if app.config.get('DEBUG') else 'An error occurred',
-                'traceback': traceback.format_exc() if app.config.get('DEBUG') else None
+                'error': error_message,
+                'traceback': error_traceback
             }), 500
         # For non-API routes, use default Flask error handling
         return error
+    
+    # Handle exceptions that aren't caught by error handlers
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        """Handle all exceptions and return JSON for API routes"""
+        if request.path.startswith('/api/'):
+            import traceback as tb
+            error_traceback = tb.format_exc() if app.config.get('DEBUG') else None
+            
+            # Check for IntegrityError
+            from sqlalchemy.exc import IntegrityError
+            if isinstance(e, IntegrityError):
+                error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+                if 'foreign key constraint' in error_msg.lower():
+                    return jsonify({
+                        'success': False,
+                        'message': 'User not found or invalid user',
+                        'error': 'The user associated with this request does not exist in the database'
+                    }), 404
+            
+            return jsonify({
+                'success': False,
+                'message': 'An error occurred',
+                'error': str(e) if app.config.get('DEBUG') else 'An error occurred',
+                'traceback': error_traceback
+            }), 500
+        
+        # Re-raise for non-API routes to use default Flask handling
+        raise
     
     @app.errorhandler(404)
     def not_found(error):

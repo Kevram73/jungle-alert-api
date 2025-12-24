@@ -240,18 +240,39 @@ def store():
     except IntegrityError as e:
         db.session.rollback()
         error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
-        if 'foreign key constraint' in error_msg.lower():
-            return jsonify({
-                'message': 'User not found or invalid user',
-                'error': 'The user associated with this request does not exist in the database'
-            }), 404
+        print(f'❌ [PRODUCTS] IntegrityError: {error_msg}')
+        print(f'❌ [PRODUCTS] User ID: {user_id}')
+        print(f'❌ [PRODUCTS] User exists: {User.query.get(user_id) is not None}')
+        
+        if 'foreign key constraint' in error_msg.lower() and 'user_id' in error_msg.lower():
+            # Vérifier à nouveau que l'utilisateur existe
+            user_check = User.query.get(user_id)
+            if not user_check:
+                return jsonify({
+                    'success': False,
+                    'message': 'User not found or invalid user',
+                    'error': 'The user associated with this request does not exist in the database. Please log in again.'
+                }), 404
+            else:
+                # L'utilisateur existe, c'est peut-être un autre problème
+                return jsonify({
+                    'success': False,
+                    'message': 'Database constraint error',
+                    'error': 'A database constraint was violated. Please try again.'
+                }), 400
+        
         return jsonify({
+            'success': False,
             'message': 'Database error',
             'error': error_msg if current_app.config.get('DEBUG') else 'A database error occurred'
         }), 400
     except Exception as e:
         db.session.rollback()
+        import traceback
+        print(f'❌ [PRODUCTS] Exception: {str(e)}')
+        print(f'❌ [PRODUCTS] Traceback: {traceback.format_exc()}')
         return jsonify({
+            'success': False,
             'message': 'Failed to create product',
             'error': str(e) if current_app.config.get('DEBUG') else 'An error occurred'
         }), 500
