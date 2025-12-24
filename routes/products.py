@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from extensions import db
 from models.user import User
@@ -8,6 +8,7 @@ from models.price_history import PriceHistory
 from services.amazon_scraping_service import AmazonScrapingService
 from services.notification_service import NotificationService
 from datetime import datetime
+from sqlalchemy.exc import IntegrityError
 import time
 import random
 
@@ -207,34 +208,53 @@ def store():
                 'current_price': 0,
             })
     
-    product = Product(**product_data)
-    db.session.add(product)
-    db.session.commit()
-    
-    # Create price history
-    if product.current_price and float(product.current_price) > 0:
-        ph = PriceHistory(product_id=product.id, price=product.current_price, recorded_at=datetime.utcnow())
-        db.session.add(ph)
+    try:
+        product = Product(**product_data)
+        db.session.add(product)
         db.session.commit()
-    
-    # Create alerts if target_price provided
-    if data.get('target_price') and float(data['target_price']) > 0:
-        for alert_type in ['PRICE_DROP', 'PRICE_INCREASE', 'STOCK_AVAILABLE']:
-            alert = Alert(
-                user_id=user_id,
-                product_id=product.id,
-                target_price=data['target_price'],
-                alert_type=alert_type,
-                is_active=True
-            )
-            db.session.add(alert)
-        db.session.commit()
-    
-    return jsonify({
-        'message': 'Product created successfully',
-        'product': product.to_dict(include_relations=True),
-        'scraped': scrape_data
-    }), 201
+        
+        # Create price history
+        if product.current_price and float(product.current_price) > 0:
+            ph = PriceHistory(product_id=product.id, price=product.current_price, recorded_at=datetime.utcnow())
+            db.session.add(ph)
+            db.session.commit()
+        
+        # Create alerts if target_price provided
+        if data.get('target_price') and float(data['target_price']) > 0:
+            for alert_type in ['PRICE_DROP', 'PRICE_INCREASE', 'STOCK_AVAILABLE']:
+                alert = Alert(
+                    user_id=user_id,
+                    product_id=product.id,
+                    target_price=data['target_price'],
+                    alert_type=alert_type,
+                    is_active=True
+                )
+                db.session.add(alert)
+            db.session.commit()
+        
+        return jsonify({
+            'message': 'Product created successfully',
+            'product': product.to_dict(include_relations=True),
+            'scraped': scrape_data
+        }), 201
+    except IntegrityError as e:
+        db.session.rollback()
+        error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+        if 'foreign key constraint' in error_msg.lower():
+            return jsonify({
+                'message': 'User not found or invalid user',
+                'error': 'The user associated with this request does not exist in the database'
+            }), 404
+        return jsonify({
+            'message': 'Database error',
+            'error': error_msg if current_app.config.get('DEBUG') else 'A database error occurred'
+        }), 400
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'message': 'Failed to create product',
+            'error': str(e) if current_app.config.get('DEBUG') else 'An error occurred'
+        }), 500
 
 @products_bp.route('/products/<int:product_id>', methods=['GET'])
 @jwt_required()
