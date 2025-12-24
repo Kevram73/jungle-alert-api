@@ -94,28 +94,40 @@ def store():
     
     # Resolve short URL if needed
     url = data['amazon_url']
+    original_url = url
     if any(domain in url for domain in ['a.co', 'amzn.eu', 'amzn.to', 'amzn.com']):
         resolved = scraping_service.resolve_short_url(url)
         if resolved:
             url = resolved
+            print(f'✅ [PRODUCTS] URL raccourcie résolue: {original_url} -> {url}')
+        else:
+            print(f'⚠️ [PRODUCTS] Impossible de résoudre l\'URL raccourcie: {original_url}')
     
-    # Check if product already exists
+    # Check if product already exists (utiliser l'URL résolue si disponible)
     existing = Product.query.filter_by(user_id=user_id, amazon_url=url).first()
+    if not existing and url != original_url:
+        # Aussi vérifier avec l'URL originale
+        existing = Product.query.filter_by(user_id=user_id, amazon_url=original_url).first()
+    
     if existing:
         return jsonify({
             'message': 'Product already exists',
             'product': existing.to_dict(include_relations=True)
         }), 409
     
-    # Extract marketplace and currency
+    # Extract marketplace and currency (toujours depuis l'URL résolue si disponible)
     marketplace = extract_marketplace_from_url(url)
+    # Si le marketplace est 'US' mais que l'URL est amzn.eu, essayer de détecter depuis les données scrapées
+    if marketplace == 'US' and 'amzn.eu' in original_url.lower():
+        print(f'⚠️ [PRODUCTS] Marketplace non détecté pour amzn.eu, sera détecté lors du scraping')
+        # On laissera le scraping détecter le marketplace
     currency = currency_for_marketplace(marketplace)
     
-    # Scrape product data
+    # Scrape product data (utiliser l'URL résolue si disponible)
     scrape_data = data.get('scrape_data', True)
     product_data = {
         'user_id': user_id,
-        'amazon_url': data['amazon_url'],
+        'amazon_url': url,  # Utiliser l'URL résolue
         'target_price': data.get('target_price'),
         'is_active': True,
         'marketplace': marketplace,
@@ -123,10 +135,25 @@ def store():
     }
     
     if scrape_data:
-        scraped = scraping_service.scrape_product_with_retry(data['amazon_url'])
+        # Utiliser l'URL résolue pour le scraping
+        scrape_url = url if url != original_url else data['amazon_url']
+        scraped = scraping_service.scrape_product_with_retry(scrape_url)
         
         if scraped['success']:
             data_dict = scraped['data']
+            
+            # Si le marketplace était 'US' mais qu'on a des données scrapées, essayer de détecter depuis l'URL scrapée
+            if marketplace == 'US' and 'amzn.eu' in original_url.lower():
+                # Les données scrapées peuvent contenir l'URL finale
+                scraped_url = data_dict.get('amazon_url') or scrape_url
+                detected_marketplace = extract_marketplace_from_url(scraped_url)
+                if detected_marketplace != 'US':
+                    marketplace = detected_marketplace
+                    currency = currency_for_marketplace(marketplace)
+                    product_data['marketplace'] = marketplace
+                    product_data['currency'] = currency
+                    print(f'✅ [PRODUCTS] Marketplace détecté depuis les données scrapées: {marketplace}')
+            
             product_data.update({
                 'title': data_dict.get('title') or data_dict.get('name') or 'Product from Amazon',
                 'description': data_dict.get('description'),
@@ -374,7 +401,15 @@ def scrape_preview():
             'errors': {'amazon_url': ['Please provide a valid Amazon product URL']}
         }), 422
     
-    scraped = scraping_service.scrape_product_with_retry(data['amazon_url'])
+    # Résoudre l'URL raccourcie si nécessaire
+    url = data['amazon_url']
+    if any(domain in url for domain in ['a.co', 'amzn.eu', 'amzn.to', 'amzn.com']):
+        resolved = scraping_service.resolve_short_url(url)
+        if resolved:
+            url = resolved
+            print(f'✅ [SCRAPE-PREVIEW] URL raccourcie résolue: {data["amazon_url"]} -> {url}')
+    
+    scraped = scraping_service.scrape_product_with_retry(url)
     
     if not scraped['success']:
         return jsonify({
@@ -388,7 +423,12 @@ def scrape_preview():
         }), 400
     
     raw = scraped['data']
-    marketplace = extract_marketplace_from_url(data['amazon_url'])
+    # Utiliser l'URL résolue ou l'URL depuis les données scrapées pour détecter le marketplace
+    final_url = raw.get('amazon_url') or url
+    marketplace = extract_marketplace_from_url(final_url)
+    # Si toujours 'US' et que c'était une URL raccourcie, essayer depuis l'URL originale résolue
+    if marketplace == 'US' and 'amzn.eu' in data['amazon_url'].lower() and url != data['amazon_url']:
+        marketplace = extract_marketplace_from_url(url)
     currency = currency_for_marketplace(marketplace)
     price = raw.get('price') or raw.get('current_price')
     
