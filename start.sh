@@ -16,6 +16,13 @@ if ! command -v docker-compose &> /dev/null; then
     exit 1
 fi
 
+# Nettoyer les conteneurs orphelins ou corrompus
+echo "🧹 Nettoyage des conteneurs existants..."
+docker-compose down -v --remove-orphans 2>/dev/null || true
+
+# Supprimer les conteneurs orphelins par nom
+docker ps -aq --filter "name=junglealert" | xargs -r docker rm -f 2>/dev/null || true
+
 # Construire les images si nécessaire
 echo "📦 Vérification des images Docker..."
 if ! docker images | grep -q "jungle_scrapping-app"; then
@@ -26,7 +33,7 @@ fi
 # Démarrer les services
 echo ""
 echo "🚀 Démarrage des services..."
-docker-compose up -d
+docker-compose up -d --force-recreate
 
 # Attendre que la base de données soit prête
 echo ""
