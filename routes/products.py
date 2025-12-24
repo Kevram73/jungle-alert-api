@@ -305,6 +305,13 @@ def scrape_and_update(product_id):
         'price_change': float(new_price) - float(old_price) if new_price and old_price else 0
     }), 200
 
+@products_bp.route('/products/<int:product_id>/refresh', methods=['POST'])
+@jwt_required()
+def refresh_product(product_id):
+    """Refresh product data (alias for scrape-update)"""
+    # Delegate to scrape_and_update function
+    return scrape_and_update(product_id)
+
 @products_bp.route('/products/scrape-preview', methods=['POST'])
 def scrape_preview():
     """

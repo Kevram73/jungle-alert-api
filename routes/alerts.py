@@ -38,11 +38,29 @@ def index():
     """Get user's alerts"""
     user_id = get_jwt_identity()
     
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
+    # Support both skip/limit (Flutter) and page/per_page (traditional)
+    skip = request.args.get('skip', type=int)
+    limit = request.args.get('limit', type=int)
+    page = request.args.get('page', type=int)
+    per_page = request.args.get('per_page', type=int)
+    is_read = request.args.get('is_read')
     
-    alerts = Alert.query.filter_by(user_id=user_id)\
-        .order_by(Alert.created_at.desc())\
+    # Convert skip/limit to page/per_page if provided
+    if skip is not None and limit is not None:
+        page = (skip // limit) + 1 if limit > 0 else 1
+        per_page = limit
+    else:
+        page = page or 1
+        per_page = per_page or 20
+    
+    query = Alert.query.filter_by(user_id=user_id)
+    
+    # Filter by is_read if provided
+    if is_read is not None:
+        is_read_bool = is_read.lower() in ('true', '1', 'yes') if isinstance(is_read, str) else bool(is_read)
+        query = query.filter_by(is_read=is_read_bool)
+    
+    alerts = query.order_by(Alert.created_at.desc())\
         .paginate(page=page, per_page=per_page, error_out=False)
     
     return jsonify({
@@ -173,6 +191,38 @@ def toggle(alert_id):
     return jsonify({
         'message': 'Alert status updated successfully',
         'alert': alert.to_dict(include_product=True)
+    }), 200
+
+@alerts_bp.route('/alerts/<int:alert_id>/read', methods=['PUT'])
+@jwt_required()
+def mark_as_read(alert_id):
+    """Mark an alert as read"""
+    user_id = get_jwt_identity()
+    alert = Alert.query.filter_by(id=alert_id, user_id=user_id).first_or_404()
+    
+    alert.is_read = True
+    alert.updated_at = datetime.utcnow()
+    db.session.commit()
+    
+    return jsonify({
+        'message': 'Alert marked as read',
+        'alert': alert.to_dict(include_product=True)
+    }), 200
+
+@alerts_bp.route('/alerts/read-all', methods=['PUT'])
+@jwt_required()
+def mark_all_as_read():
+    """Mark all user's alerts as read"""
+    user_id = get_jwt_identity()
+    
+    updated = Alert.query.filter_by(user_id=user_id, is_read=False)\
+        .update({'is_read': True, 'updated_at': datetime.utcnow()}, synchronize_session=False)
+    
+    db.session.commit()
+    
+    return jsonify({
+        'message': 'All alerts marked as read',
+        'updated_count': updated
     }), 200
 
 @alerts_bp.route('/alerts/active', methods=['GET'])

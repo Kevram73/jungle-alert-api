@@ -17,7 +17,12 @@ def create_app(config_name=None):
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
-    CORS(app, origins=app.config['CORS_ORIGINS'], supports_credentials=True)
+    # CORS: Allow all origins for mobile apps, or use specific origins for web
+    cors_origins = app.config.get('CORS_ORIGINS', [])
+    if not cors_origins or '*' in cors_origins:
+        CORS(app, supports_credentials=True)  # Allow all origins for mobile apps
+    else:
+        CORS(app, origins=cors_origins, supports_credentials=True)
     
     # Initialize Swagger for API documentation
     swagger_config = {

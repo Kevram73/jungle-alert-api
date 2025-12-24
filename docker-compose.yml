@@ -38,7 +38,7 @@ services:
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-key-change-in-production}
       - SELENIUM_HEADLESS=true
-      - CORS_ORIGINS=http://localhost:3000,http://localhost:8080
+      - CORS_ORIGINS=*
     depends_on:
       db:
         condition: service_healthy

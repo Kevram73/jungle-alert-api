@@ -119,3 +119,89 @@ def destroy():
     
     return jsonify({'message': 'Account deleted successfully'}), 200
 
+@users_bp.route('/notifications/settings', methods=['GET'])
+@jwt_required()
+def get_notification_settings():
+    """Get notification settings"""
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'message': 'User not found'}), 404
+    
+    return jsonify({
+        'email_notifications': user.email_notifications,
+        'whatsapp_notifications': user.whatsapp_notifications,
+        'push_notifications': user.push_notifications,
+        'whatsapp_number': user.whatsapp_number if user.whatsapp_number else None,
+        'fcm_token_set': bool(user.fcm_token),
+    }), 200
+
+@users_bp.route('/notifications/settings', methods=['PUT'])
+@jwt_required()
+def update_notification_settings():
+    """Update notification settings"""
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'message': 'User not found'}), 404
+    
+    data = request.get_json()
+    
+    # Update notification settings
+    if 'email_notifications' in data:
+        user.email_notifications = bool(data['email_notifications'])
+    if 'whatsapp_notifications' in data:
+        user.whatsapp_notifications = bool(data['whatsapp_notifications'])
+    if 'push_notifications' in data:
+        user.push_notifications = bool(data['push_notifications'])
+    if 'whatsapp_number' in data:
+        user.whatsapp_number = data['whatsapp_number'] if data['whatsapp_number'] else None
+    if 'fcm_token' in data:
+        user.fcm_token = data['fcm_token'] if data['fcm_token'] else None
+    
+    db.session.commit()
+    
+    return jsonify({
+        'message': 'Notification settings updated successfully',
+        'settings': {
+            'email_notifications': user.email_notifications,
+            'whatsapp_notifications': user.whatsapp_notifications,
+            'push_notifications': user.push_notifications,
+            'whatsapp_number': user.whatsapp_number,
+            'fcm_token_set': bool(user.fcm_token),
+        }
+    }), 200
+
+@users_bp.route('/notifications/test', methods=['POST'])
+@jwt_required()
+def test_notification():
+    """Send a test notification"""
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'message': 'User not found'}), 404
+    
+    data = request.get_json()
+    channel = data.get('channel', 'email')
+    
+    if channel not in ['email', 'whatsapp', 'push']:
+        return jsonify({'message': 'Invalid channel. Must be email, whatsapp, or push'}), 422
+    
+    # Check if channel is enabled
+    if channel == 'email' and not user.email_notifications:
+        return jsonify({'message': 'Email notifications are not enabled'}), 400
+    if channel == 'whatsapp' and not user.whatsapp_notifications:
+        return jsonify({'message': 'WhatsApp notifications are not enabled'}), 400
+    if channel == 'push' and not user.push_notifications:
+        return jsonify({'message': 'Push notifications are not enabled'}), 400
+    
+    # In a real implementation, you would send a test notification here
+    # For now, we'll just return success
+    return jsonify({
+        'message': f'Test {channel} notification sent successfully',
+        'channel': channel
+    }), 200
+

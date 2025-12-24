@@ -105,3 +105,43 @@ def limits():
         'subscription_expires_at': user.subscription_end_date.isoformat() if user.subscription_end_date else None,
     }), 200
 
+@subscriptions_bp.route('/subscription/upgrade', methods=['PUT'])
+@jwt_required()
+def upgrade():
+    """Upgrade user subscription"""
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    if not data.get('subscription_tier'):
+        return jsonify({'message': 'subscription_tier is required'}), 422
+    
+    from models.user import User
+    user = User.query.get(user_id)
+    
+    tier = data['subscription_tier'].upper()
+    if tier not in ['PREMIUM_SIMPLE', 'PREMIUM_DELUXE']:
+        return jsonify({'message': 'Invalid subscription tier'}), 422
+    
+    # Map to service format
+    plan_map = {
+        'PREMIUM_SIMPLE': 'premium_simple',
+        'PREMIUM_DELUXE': 'premium_deluxe'
+    }
+    plan = plan_map[tier]
+    
+    try:
+        # Use the subscription service to upgrade
+        subscription = SubscriptionService.create_subscription(
+            user,
+            plan,
+            data.get('payment_reference')
+        )
+        
+        return jsonify({
+            'message': 'Subscription upgraded successfully',
+            'subscription': subscription.to_dict(),
+            'user': user.to_dict()
+        }), 200
+    except ValueError as e:
+        return jsonify({'message': str(e)}), 400
+

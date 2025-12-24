@@ -11,6 +11,7 @@ class Alert(db.Model):
     target_price = db.Column(db.Numeric(10, 2), nullable=False)
     alert_type = db.Column(SQLEnum('PRICE_DROP', 'PRICE_INCREASE', 'STOCK_AVAILABLE', name='alert_type'), default='PRICE_DROP', nullable=False)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
+    is_read = db.Column(db.Boolean, default=False, nullable=False)
     email_sent = db.Column(db.Boolean, default=False, nullable=False)
     whatsapp_sent = db.Column(db.Boolean, default=False, nullable=False)
     push_sent = db.Column(db.Boolean, default=False, nullable=False)
@@ -27,6 +28,7 @@ class Alert(db.Model):
             'target_price': float(self.target_price) if self.target_price else 0.0,
             'alert_type': self.alert_type,
             'is_active': self.is_active,
+            'is_read': self.is_read,
             'email_sent': self.email_sent,
             'whatsapp_sent': self.whatsapp_sent,
             'push_sent': self.push_sent,
