@@ -319,7 +319,9 @@ def update(product_id):
     product.currency = currency_for_marketplace(marketplace)
     
     product.updated_at = datetime.utcnow()
+
     
+    # Create price history if price changed (optimized - single commit)
     # Create price history if price changed (optimized - single commit)
     if 'current_price' in data and data['current_price'] != old_price:
         ph = PriceHistory(product_id=product.id, price=data['current_price'], recorded_at=datetime.utcnow())
@@ -359,6 +361,7 @@ def scrape_and_update(product_id):
     scraped = scraping_service.scrape_product_with_retry(product.amazon_url)
     
     if not scraped['success']:
+<<<<<<< HEAD
         error_msg = scraped.get('error', 'Unknown error')
         
         # Check if product no longer exists and delete associated alerts
@@ -409,7 +412,13 @@ def scrape_and_update(product_id):
     product.marketplace = marketplace
     product.currency = currency_for_marketplace(marketplace)
     
+<<<<<<< HEAD
     # Create price history if price changed (optimized - single commit)
+=======
+    db.session.commit()
+    
+    # Create price history if price changed
+>>>>>>> 57e52d6dd744e097e385ec4cbf25e2f9a7666049
     new_price = data.get('price') or data.get('current_price')
     if new_price and new_price != old_price:
         ph = PriceHistory(product_id=product.id, price=new_price, recorded_at=datetime.utcnow())
@@ -630,6 +639,7 @@ def bulk_update_prices():
         'errors': errors
     }), 200
 
+<<<<<<< HEAD
 @products_bp.route('/products/cleanup-orphaned-alerts', methods=['POST'])
 @jwt_required()
 def cleanup_orphaned_alerts():
@@ -671,3 +681,5 @@ def cleanup_orphaned_alerts():
         'deleted_alerts': deleted_count
     }), 200
 
+=======
+>>>>>>> 57e52d6dd744e097e385ec4cbf25e2f9a7666049
