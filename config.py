@@ -34,6 +34,16 @@ class Config:
     SELENIUM_TIMEOUT = int(os.getenv('SELENIUM_TIMEOUT', 30))
     SCRAPING_DELAY_MIN = int(os.getenv('SCRAPING_DELAY_MIN', 1))
     SCRAPING_DELAY_MAX = int(os.getenv('SCRAPING_DELAY_MAX', 3))
+    
+    # Email Configuration
+    MAIL_SERVER = os.getenv('MAIL_HOST', 'smtp.office365.com')
+    MAIL_PORT = int(os.getenv('MAIL_PORT', 587))
+    MAIL_USE_TLS = os.getenv('MAIL_ENCRYPTION', 'tls').lower() == 'tls'
+    MAIL_USE_SSL = os.getenv('MAIL_ENCRYPTION', 'tls').lower() == 'ssl'
+    MAIL_USERNAME = os.getenv('MAIL_USERNAME', '')
+    MAIL_PASSWORD = os.getenv('MAIL_PASSWORD', '')
+    MAIL_DEFAULT_SENDER = os.getenv('MAIL_FROM_ADDRESS', 'no-reply@pretconnectloan.com')
+    MAIL_FROM_NAME = os.getenv('MAIL_FROM_NAME', 'Jungle Alert')
 
 class DevelopmentConfig(Config):
     DEBUG = True

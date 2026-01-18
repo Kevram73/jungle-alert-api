@@ -3,6 +3,11 @@ from extensions import db
 from models.user import User
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from datetime import datetime
+from services.email_service import EmailService
+import logging
+
+logger = logging.getLogger(__name__)
+email_service = EmailService()
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -96,6 +101,15 @@ def register():
         
         db.session.add(user)
         db.session.commit()
+        
+        # Send welcome email
+        try:
+            user_name = f"{user.first_name} {user.last_name}"
+            email_service.send_welcome_email(user.email, user_name)
+            logger.info(f"Welcome email sent to {user.email}")
+        except Exception as e:
+            logger.error(f"Failed to send welcome email: {str(e)}")
+            # Don't fail registration if email fails
         
         # Create access token (identity must be a string)
         access_token = create_access_token(identity=str(user.id))

@@ -2,8 +2,10 @@ from models.alert import Alert
 from models.product import Product
 from datetime import datetime
 import logging
+from services.email_service import EmailService
 
 logger = logging.getLogger(__name__)
+email_service = EmailService()
 
 class NotificationService:
     """Service for handling notifications and alerts"""
@@ -45,13 +47,27 @@ class NotificationService:
     
     def send_alert_notifications(self, alert: Alert):
         """Send notifications for a triggered alert"""
-        # This would integrate with email, push, and WhatsApp services
-        # For now, just mark as sent
         user = alert.user
+        product = alert.product
         
-        if user.email_notifications and not alert.email_sent:
-            # TODO: Send email notification
-            alert.email_sent = True
+        if user.email_notifications and not alert.email_sent and user.email:
+            try:
+                success = email_service.send_price_alert_email(
+                    user_email=user.email,
+                    user_name=user.name or user.email.split('@')[0],
+                    product_name=product.name,
+                    product_url=product.url,
+                    current_price=float(product.current_price),
+                    target_price=float(alert.target_price),
+                    alert_type=alert.alert_type
+                )
+                if success:
+                    alert.email_sent = True
+                    logger.info(f"Email alert sent to {user.email} for product {product.name}")
+                else:
+                    logger.error(f"Failed to send email alert to {user.email}")
+            except Exception as e:
+                logger.error(f"Error sending email alert: {str(e)}")
         
         if user.push_notifications and not alert.push_sent and user.fcm_token:
             # TODO: Send push notification
