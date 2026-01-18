@@ -156,8 +156,8 @@ class AmazonScrapingService:
             
             logger.info(f"🎯 Scraping ASIN: {asin}, Marketplace: {marketplace}")
             
-            # Add random delay before scraping
-            delay = random.uniform(self.delay_min, self.delay_max)
+            # Add random delay before scraping (reduced for better performance)
+            delay = random.uniform(max(0.5, self.delay_min), max(1.0, self.delay_max))
             time.sleep(delay)
             
             html = self.fetch_product_page(url)
@@ -212,9 +212,13 @@ class AmazonScrapingService:
             if self.is_captcha_page(driver.page_source):
                 raise Exception('Amazon detected automated request (captcha). Please try again later.')
             
-            # Scroll to load dynamic content
+            # Check if product doesn't exist
+            if self.is_product_not_found(driver.page_source):
+                raise Exception('Product not found or no longer available on Amazon')
+            
+            # Scroll to load dynamic content (optimized - reduced wait time)
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
-            time.sleep(1)
+            time.sleep(0.5)  # Reduced from 1s to 0.5s
             
             html = driver.page_source
             return html
@@ -379,6 +383,22 @@ class AmazonScrapingService:
     def is_valid_product_data(self, data: Dict) -> bool:
         """Validate scraped product data"""
         return bool(data.get('title') and data.get('asin'))
+    
+    def is_product_not_found(self, html: str) -> bool:
+        """Check if product page indicates product doesn't exist"""
+        html_lower = html.lower()
+        indicators = [
+            'sorry, we couldn\'t find that page',
+            'page not found',
+            'product not available',
+            'we couldn\'t find that page',
+            'page introuvable',
+            'seite nicht gefunden',
+            'prodotto non disponibile',
+            'producto no disponible',
+            'asin not found',
+        ]
+        return any(indicator in html_lower for indicator in indicators)
     
     def extract_all_product_data(self, html: str, url: str, asin: str, marketplace: str, country: str) -> Dict:
         """Extract all product data from HTML"""

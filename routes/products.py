@@ -211,16 +211,17 @@ def store():
     try:
         product = Product(**product_data)
         db.session.add(product)
-        db.session.commit()
+        # Flush to get product.id without committing (performance optimization)
+        db.session.flush()
         
         # Create price history
         if product.current_price and float(product.current_price) > 0:
             ph = PriceHistory(product_id=product.id, price=product.current_price, recorded_at=datetime.utcnow())
             db.session.add(ph)
-            db.session.commit()
         
-        # Create alerts if target_price provided
+        # Create alerts if target_price provided (bulk insert optimization)
         if data.get('target_price') and float(data['target_price']) > 0:
+            alerts = []
             for alert_type in ['PRICE_DROP', 'PRICE_INCREASE', 'STOCK_AVAILABLE']:
                 alert = Alert(
                     user_id=user_id,
@@ -229,8 +230,11 @@ def store():
                     alert_type=alert_type,
                     is_active=True
                 )
-                db.session.add(alert)
-            db.session.commit()
+                alerts.append(alert)
+            db.session.add_all(alerts)  # Bulk add instead of individual adds
+        
+        # Single commit for all operations (performance optimization)
+        db.session.commit()
         
         return jsonify({
             'message': 'Product created successfully',
@@ -315,13 +319,16 @@ def update(product_id):
     product.currency = currency_for_marketplace(marketplace)
     
     product.updated_at = datetime.utcnow()
-    db.session.commit()
+
     
-    # Create price history if price changed
+    # Create price history if price changed (optimized - single commit)
+    # Create price history if price changed (optimized - single commit)
     if 'current_price' in data and data['current_price'] != old_price:
         ph = PriceHistory(product_id=product.id, price=data['current_price'], recorded_at=datetime.utcnow())
         db.session.add(ph)
-        db.session.commit()
+    
+    # Single commit for all updates (performance optimization)
+    db.session.commit()
     
     return jsonify({
         'message': 'Product updated successfully',
@@ -335,10 +342,8 @@ def destroy(product_id):
     user_id = get_jwt_identity()
     product = Product.query.filter_by(id=product_id, user_id=user_id).first_or_404()
     
-    # Delete all alerts associated with this product
-    alerts = Alert.query.filter_by(product_id=product_id).all()
-    for alert in alerts:
-        db.session.delete(alert)
+    # Delete all alerts associated with this product (optimized - bulk delete)
+    Alert.query.filter_by(product_id=product_id).delete(synchronize_session=False)
     
     # Delete the product (cascade will also handle alerts, but explicit deletion ensures it)
     db.session.delete(product)
@@ -356,9 +361,29 @@ def scrape_and_update(product_id):
     scraped = scraping_service.scrape_product_with_retry(product.amazon_url)
     
     if not scraped['success']:
+<<<<<<< HEAD
+        error_msg = scraped.get('error', 'Unknown error')
+        
+        # Check if product no longer exists and delete associated alerts
+        if 'not found' in error_msg.lower() or 'no longer available' in error_msg.lower():
+            # Delete all alerts for this product (optimized - bulk delete)
+            Alert.query.filter_by(product_id=product_id).delete(synchronize_session=False)
+            
+            # Optionally mark product as inactive instead of deleting
+            product.is_active = False
+            
+            # Single commit for all operations (performance optimization)
+            db.session.commit()
+            
+            return jsonify({
+                'message': 'Product no longer exists on Amazon. Alerts have been deleted.',
+                'error': error_msg,
+                'product_deactivated': True
+            }), 400
+        
         return jsonify({
             'message': 'Failed to scrape product data',
-            'error': scraped.get('error', 'Unknown error')
+            'error': error_msg
         }), 400
     
     data = scraped['data']
@@ -387,16 +412,23 @@ def scrape_and_update(product_id):
     product.marketplace = marketplace
     product.currency = currency_for_marketplace(marketplace)
     
+<<<<<<< HEAD
+    # Create price history if price changed (optimized - single commit)
+=======
     db.session.commit()
     
     # Create price history if price changed
+>>>>>>> 57e52d6dd744e097e385ec4cbf25e2f9a7666049
     new_price = data.get('price') or data.get('current_price')
     if new_price and new_price != old_price:
         ph = PriceHistory(product_id=product.id, price=new_price, recorded_at=datetime.utcnow())
         db.session.add(ph)
-        db.session.commit()
-        
-        # Check alerts
+    
+    # Single commit for all updates (performance optimization)
+    db.session.commit()
+    
+    # Check alerts after commit
+    if new_price and new_price != old_price:
         notification_service.check_and_trigger_alerts(product, send_notifications=False)
     
     return jsonify({
@@ -553,12 +585,14 @@ def bulk_update_prices():
     products = Product.query.filter_by(user_id=user_id, is_active=True).all()
     
     updated = 0
+    deleted_alerts = 0
     errors = []
+    price_histories = []
     
     for product in products:
         try:
-            # Random delay between products
-            time.sleep(random.uniform(2, 4))
+            # Random delay between products (reduced for better performance)
+            time.sleep(random.uniform(1, 2))  # Reduced from 2-4s to 1-2s
             
             scraped = scraping_service.scrape_product_with_retry(product.amazon_url)
             
@@ -569,24 +603,83 @@ def bulk_update_prices():
                 if new_price != old_price:
                     product.current_price = new_price
                     product.last_price_check = datetime.utcnow()
-                    db.session.commit()
                     
-                    # Create price history
+                    # Create price history (batch add for performance)
                     ph = PriceHistory(product_id=product.id, price=new_price, recorded_at=datetime.utcnow())
-                    db.session.add(ph)
-                    db.session.commit()
+                    price_histories.append(ph)
                     
                     # Check alerts
                     notification_service.check_and_trigger_alerts(product, send_notifications=False)
                     
                     updated += 1
+            elif not scraped['success']:
+                # Check if product no longer exists
+                error_msg = scraped.get('error', '')
+                if 'not found' in error_msg.lower() or 'no longer available' in error_msg.lower():
+                    # Delete all alerts for this product
+                    deleted_count = Alert.query.filter_by(product_id=product.id).delete()
+                    deleted_alerts += deleted_count
+                    
+                    # Mark product as inactive
+                    product.is_active = False
+                    errors.append(f"Product {product.id}: No longer available on Amazon")
         except Exception as e:
             errors.append(f"Product {product.id}: {str(e)}")
+    
+    # Batch commit all price histories and product updates (performance optimization)
+    if price_histories:
+        db.session.add_all(price_histories)
+    db.session.commit()
     
     return jsonify({
         'message': 'Bulk price update completed',
         'updated_products': updated,
+        'deleted_alerts': deleted_alerts,
         'total_products': len(products),
         'errors': errors
     }), 200
 
+<<<<<<< HEAD
+@products_bp.route('/products/cleanup-orphaned-alerts', methods=['POST'])
+@jwt_required()
+def cleanup_orphaned_alerts():
+    """Clean up alerts for products that no longer exist"""
+    user_id = get_jwt_identity()
+    
+    # Find all alerts for this user
+    user_alerts = Alert.query.filter_by(user_id=user_id).all()
+    
+    deleted_count = 0
+    product_ids_to_check = set()
+    
+    # Collect all product IDs from alerts
+    for alert in user_alerts:
+        product_ids_to_check.add(alert.product_id)
+    
+    # Check which products still exist
+    existing_products = Product.query.filter(
+        Product.id.in_(product_ids_to_check),
+        Product.user_id == user_id
+    ).all()
+    existing_product_ids = {p.id for p in existing_products}
+    
+    # Find orphaned alerts (alerts pointing to non-existent products)
+    orphaned_alerts = Alert.query.filter_by(user_id=user_id).filter(
+        ~Alert.product_id.in_(existing_product_ids)
+    ).all()
+    
+    if orphaned_alerts:
+        # Bulk delete orphaned alerts
+        Alert.query.filter_by(user_id=user_id).filter(
+            ~Alert.product_id.in_(existing_product_ids)
+        ).delete(synchronize_session=False)
+        db.session.commit()
+        deleted_count = len(orphaned_alerts)
+    
+    return jsonify({
+        'message': 'Orphaned alerts cleanup completed',
+        'deleted_alerts': deleted_count
+    }), 200
+
+=======
+>>>>>>> 57e52d6dd744e097e385ec4cbf25e2f9a7666049
