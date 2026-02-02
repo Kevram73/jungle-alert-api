@@ -1,14 +1,32 @@
-# Utiliser une image Python officielle comme base
+# Multi-stage build pour optimiser la taille de l'image
+FROM python:3.11-slim as builder
+
+# Définir le répertoire de travail
+WORKDIR /app
+
+# Installer les dépendances de build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copier et installer les dépendances Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# Stage final
 FROM python:3.11-slim
+
+# Créer un utilisateur non-root pour la sécurité
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 # Définir le répertoire de travail
 WORKDIR /app
 
 # Installer les dépendances système nécessaires pour Chrome et Selenium
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     gnupg \
-    unzip \
     curl \
     ca-certificates \
     fonts-liberation \
@@ -34,8 +52,9 @@ RUN apt-get update && apt-get install -y \
     libvulkan1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Installer Google Chrome (méthode directe - plus rapide)
-RUN wget --no-check-certificate --timeout=30 --tries=3 -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+# Installer Google Chrome
+RUN wget --no-check-certificate --timeout=30 --tries=3 -q -O /tmp/chrome.deb \
+    https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
     && apt-get update \
     && apt-get install -y /tmp/chrome.deb \
     && rm -f /tmp/chrome.deb \
@@ -44,29 +63,40 @@ RUN wget --no-check-certificate --timeout=30 --tries=3 -q -O /tmp/chrome.deb htt
 # Vérifier l'installation de Chrome
 RUN google-chrome --version
 
-# Copier les fichiers de requirements
-COPY requirements.txt .
+# Copier les dépendances Python depuis le builder
+COPY --from=builder /root/.local /root/.local
 
-# Installer les dépendances Python
-RUN pip install --no-cache-dir -r requirements.txt
+# S'assurer que les scripts sont dans le PATH
+ENV PATH=/root/.local/bin:$PATH
 
 # Copier le code de l'application
-COPY . .
+COPY --chown=appuser:appuser . .
 
-# Créer un répertoire pour les données de sortie
-RUN mkdir -p /app/output && chmod 777 /app/output
+# Créer les répertoires nécessaires
+RUN mkdir -p /app/output /app/logs && \
+    chown -R appuser:appuser /app/output /app/logs && \
+    chmod 755 /app/output /app/logs
 
 # Définir les variables d'environnement
 ENV PYTHONUNBUFFERED=1
 ENV FLASK_APP=run.py
-ENV FLASK_ENV=development
+ENV FLASK_ENV=production
 ENV DISPLAY=:99
 
 # Exposer le port de l'API
 EXPOSE 5000
 
-# Commande par défaut - démarrer l'application
-CMD ["python", "run.py"]
+# Passer à l'utilisateur non-root
+USER appuser
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:5000/api/health || exit 1
+
+# Commande par défaut - démarrer l'application avec gunicorn
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "2", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "run:app"]
+
+
 
 
 
